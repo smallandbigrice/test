@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import cv2
 import threading
+import multiprocessing as mp
 import queue
 import time
 import numpy as np
@@ -19,10 +20,11 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-20260614"
-ALGORITHM_NOTE = "Frame-diff ROI + trajectory/Yolo confirmation; sky-gray threshold path removed."
+ALGORITHM_VERSION = "frame-diff-multiproc-20260614"
+ALGORITHM_NOTE = "Per-camera process preprocessing + centralized RKNN inference; frame-diff ROI logic kept."
 N_CAM = 5                        
 INIT_TIME = 5                    
+USE_CAMERA_PROCESSES = True
 
 TRACKER_MIN_HITS = 4            
 TRACKER_MAX_DIST = 100           
@@ -183,9 +185,36 @@ res_queues =[queue.Queue(maxsize=RES_QUEUE_SIZE) for _ in range(N_CAM)]
 display_queues =[queue.Queue(maxsize=2) for _ in range(N_CAM)]
 
 stop_event = threading.Event()
+video_allowed_event = None
 SYSTEM_START_TIME = time.time()
 INIT_SIGNAL_SENT = False
 VIDEO_STREAM_ALLOWED = False
+
+def init_runtime_ipc(use_camera_processes):
+    global inf_queues, res_queues, display_queues, stop_event, video_allowed_event
+    if not use_camera_processes:
+        video_allowed_event = None
+        return None
+    try:
+        ctx = mp.get_context("fork")
+    except ValueError:
+        print("--> multiprocessing fork is unavailable; fallback to camera threads.", flush=True)
+        video_allowed_event = None
+        return None
+    inf_queues = [ctx.Queue(maxsize=INF_QUEUE_SIZE) for _ in range(N_CAM)]
+    res_queues = [ctx.Queue(maxsize=RES_QUEUE_SIZE) for _ in range(N_CAM)]
+    display_queues = [ctx.Queue(maxsize=2) for _ in range(N_CAM)]
+    stop_event = ctx.Event()
+    video_allowed_event = ctx.Event()
+    return ctx
+
+def is_video_stream_allowed():
+    if video_allowed_event is not None:
+        try:
+            return video_allowed_event.is_set()
+        except Exception:
+            pass
+    return VIDEO_STREAM_ALLOWED
 
 def put_latest(q, item):
     try:
@@ -1259,7 +1288,8 @@ def capture_job(cam_idx):
     flicker_suppressor = FixedFlickerSuppressor() if ENABLE_FLICKER_SUPPRESSOR else None
     
     f_idx = 0
-    v_sender = video_senders[cam_idx]
+    local_data_sender = DataSender(DATA_TARGETS, BOARD_ID)
+    v_sender = VideoSender(VIDEO_TARGET_IP, VIDEO_BASE_PORT)
     learning_mode = True
     current_draw_boxes =[] 
     bg_samples = []
@@ -1280,8 +1310,9 @@ def capture_job(cam_idx):
 
         H, W = frame.shape[:2]
         f_idx += 1
-        visual_enabled = VIDEO_STREAM_ALLOWED or SHOW_INDIVIDUAL_WINDOWS
-        send_video_this_frame = VIDEO_STREAM_ALLOWED and ((f_idx + cam_idx) % VIDEO_SEND_EVERY_N_FRAMES == 0)
+        stream_allowed = is_video_stream_allowed()
+        visual_enabled = stream_allowed or SHOW_INDIVIDUAL_WINDOWS
+        send_video_this_frame = stream_allowed and ((f_idx + cam_idx) % VIDEO_SEND_EVERY_N_FRAMES == 0)
         draw_this_frame = send_video_this_frame or SHOW_INDIVIDUAL_WINDOWS
         processed_for_detection = False
         sent_inference_this_frame = False
@@ -1495,7 +1526,7 @@ def capture_job(cam_idx):
         if not learning_mode:
             if confirmed:
                 gimbal_data = [[b[0], b[1], b[2], b[3], estimate_rough_range_m(b, W)] for b in confirmed]
-                data_sender.send_packet("data", cam_idx, gimbal_data, target="gimbal")
+                local_data_sender.send_packet("data", cam_idx, gimbal_data, target="gimbal")
         if visual_enabled and len(current_draw_boxes) > MAX_DRAW_BOXES:
             current_draw_boxes = current_draw_boxes[-MAX_DRAW_BOXES:]
 
@@ -1519,25 +1550,38 @@ def capture_job(cam_idx):
     cap.release()
 
 if __name__ == '__main__':
+    runtime_ctx = init_runtime_ipc(USE_CAMERA_PROCESSES)
+    use_camera_processes = USE_CAMERA_PROCESSES and runtime_ctx is not None
+    latest_display_frames = [None for _ in range(N_CAM)]
+    
+    print(f"--> Detection enabled. version={ALGORITHM_VERSION}", flush=True)
+    print(f"--> {ALGORITHM_NOTE}", flush=True)
+    print(f"--> Camera workers: {'processes' if use_camera_processes else 'threads'}", flush=True)
+    t_inf = threading.Thread(target=inference_worker); t_inf.daemon = True; t_inf.start()
+    camera_workers = []
+    for i in range(N_CAM):
+        if use_camera_processes:
+            worker = runtime_ctx.Process(target=capture_job, args=(i,), daemon=True)
+        else:
+            worker = threading.Thread(target=capture_job, args=(i,), daemon=True)
+        worker.start()
+        camera_workers.append(worker)
+        time.sleep(0.5)
+
     if SHOW_INDIVIDUAL_WINDOWS:
         for i in range(N_CAM):
             cv2.namedWindow(f"Cam {i}", cv2.WINDOW_NORMAL)
             cv2.resizeWindow(f"Cam {i}", 640, 360)
-        latest_display_frames = [None for _ in range(N_CAM)]
-    
-    print(f"--> Detection enabled. version={ALGORITHM_VERSION}", flush=True)
-    print(f"--> {ALGORITHM_NOTE}", flush=True)
-    t_inf = threading.Thread(target=inference_worker); t_inf.daemon = True; t_inf.start()
-    for i in range(N_CAM):
-        t = threading.Thread(target=capture_job, args=(i,)); t.daemon = True; t.start()
-        time.sleep(0.5)
     
     def timer_job():
         global INIT_SIGNAL_SENT, VIDEO_STREAM_ALLOWED
         while not stop_event.is_set():
             if not INIT_SIGNAL_SENT and (time.time() - SYSTEM_START_TIME > INIT_TIME):
 
-                VIDEO_STREAM_ALLOWED = True; INIT_SIGNAL_SENT = True
+                VIDEO_STREAM_ALLOWED = True
+                if video_allowed_event is not None:
+                    video_allowed_event.set()
+                INIT_SIGNAL_SENT = True
             time.sleep(1)
     
     threading.Thread(target=timer_job, daemon=True).start()
@@ -1557,5 +1601,17 @@ if __name__ == '__main__':
             else:
                 time.sleep(0.05)
     except KeyboardInterrupt: pass
-    stop_event.set(); time.sleep(1.0)
+    stop_event.set()
+    for worker in camera_workers:
+        try:
+            worker.join(timeout=1.0)
+        except Exception:
+            pass
+        if use_camera_processes:
+            try:
+                if worker.is_alive():
+                    worker.terminate()
+            except Exception:
+                pass
+    time.sleep(0.5)
     cv2.destroyAllWindows()
