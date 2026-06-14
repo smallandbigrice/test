@@ -1,0 +1,32 @@
+# Runtime/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local dependency/cache folders
+.tools/
+.tmp*/
+_inspect*/
+_cleanup_backups/
+
+# Datasets and generated media
+record_2k_pure/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.m4v
+*.jpg
+*.jpeg
+*.png
+*.rar
+*.zip
+
+# Model artifacts
+*.pt
+*.onnx
+*.rknn
+
+# Local OS/editor files
+.DS_Store
+Thumbs.db
