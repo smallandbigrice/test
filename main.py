@@ -20,8 +20,8 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-vegetation-filter-20260615"
-ALGORITHM_NOTE = "Per-camera process preprocessing + vegetation/edge chaos suppression + adaptive trajectory confirmation."
+ALGORITHM_VERSION = "frame-diff-low-layer-hard-suppress-20260615"
+ALGORITHM_NOTE = "Low-layer hard edge suppression for building/tree backgrounds; high-layer sensitivity kept."
 N_CAM = 5                        
 INIT_TIME = 5                    
 USE_CAMERA_PROCESSES = True
@@ -166,6 +166,7 @@ EDGE_DENSITY_THRESH = 0.35 if HIGH_LAYER_MODE else 0.18
 EDGE_DENSITY_PAD = 24
 EDGE_DENSITY_SOFT_LIMIT = 0.50 if HIGH_LAYER_MODE else 0.38
 EDGE_DENSITY_SCORE_PENALTY = 45.0 if HIGH_LAYER_MODE else 65.0
+ENABLE_LOW_LAYER_EDGE_HARD_FILTER = not HIGH_LAYER_MODE
 ENABLE_SPATIAL_CHAOS_FILTER = True
 CHAOS_CELL_PX = 220
 CHAOS_LOCAL_ROI_LIMIT = 5
@@ -796,12 +797,14 @@ def motion_rois_from_mask(mask, diff_img, edge_mask, gray, scale_x, scale_y, ful
             and w <= MAX_DIFF_BOX_W
             and h <= MAX_DIFF_BOX_H
             and compactness >= FAR_MIN_COMPACTNESS
+            and (not ENABLE_LOW_LAYER_EDGE_HARD_FILTER or texture <= EDGE_DENSITY_THRESH)
         )
         is_near_compact = (
             area <= NEAR_MAX_DIFF_AREA
             and w <= NEAR_MAX_DIFF_BOX_W
             and h <= NEAR_MAX_DIFF_BOX_H
             and compactness >= NEAR_MIN_COMPACTNESS
+            and (not ENABLE_LOW_LAYER_EDGE_HARD_FILTER or texture <= NEAR_EDGE_DENSITY_THRESH)
         )
         if not (is_far_tiny or is_near_compact):
             continue
