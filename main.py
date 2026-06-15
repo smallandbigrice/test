@@ -20,8 +20,8 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-multiproc-20260614"
-ALGORITHM_NOTE = "Per-camera process preprocessing + centralized RKNN inference; frame-diff ROI logic kept."
+ALGORITHM_VERSION = "frame-diff-vegetation-filter-20260615"
+ALGORITHM_NOTE = "Per-camera process preprocessing + vegetation/edge chaos suppression + adaptive trajectory confirmation."
 N_CAM = 5                        
 INIT_TIME = 5                    
 USE_CAMERA_PROCESSES = True
@@ -76,7 +76,7 @@ REF_TRAJ_MIN_VALID_RATIO = 0.55
 REF_TRAJ_MAX_MISSED_RATIO = 0.45
 REF_TRAJ_EARLY_STRICT_DURATION = 10
 REF_TRAJ_EARLY_MIN_VALID_RATIO = 0.65
-REF_TRAJ_MIN_STRAIGHTNESS = 0.18
+REF_TRAJ_MIN_STRAIGHTNESS = 0.30 if HIGH_LAYER_MODE else 0.45
 REF_TRAJ_MAX_CV_SPEED = 1.25
 REF_TRAJ_MAX_HEADING_STD = 95.0
 REF_TRAJ_MAX_LATERAL_JITTER_RATIO = 0.90
@@ -133,6 +133,9 @@ LCM_SCORE_WEIGHT = 2.0
 MOTION_ERODE_ITER = 1
 MOTION_DILATE_ITER = 1
 MOTION_CLOSE_ITER = 1
+ENABLE_MOTION_OPENING = True
+MOTION_OPEN_ITER = 0 if HIGH_LAYER_MODE else 1
+MOTION_OPEN_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 MOTION_ERODE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
 MOTION_DILATE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 MOTION_CLOSE_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -146,7 +149,7 @@ RES_QUEUE_SIZE = MAX_ROIS_PER_FRAME + 4
 DIFF_W, DIFF_H = 1920, 1080
 MODEL_PATH = '../model/yolov5s.rknn'
 ENABLE_GLOBAL_MOTION_COMP = False
-ENABLE_EDGE_DENSITY_FILTER = False
+ENABLE_EDGE_DENSITY_FILTER = True
 STAB_W, STAB_H = 480, 270
 STAB_MIN_RESPONSE = 0.08
 STAB_MAX_SHIFT = 80
@@ -161,6 +164,22 @@ NEAR_EDGE_DENSITY_THRESH = 0.30
 EDGE_GRAD_THRESH = 45
 EDGE_DENSITY_THRESH = 0.35 if HIGH_LAYER_MODE else 0.18
 EDGE_DENSITY_PAD = 24
+EDGE_DENSITY_SOFT_LIMIT = 0.50 if HIGH_LAYER_MODE else 0.38
+EDGE_DENSITY_SCORE_PENALTY = 45.0 if HIGH_LAYER_MODE else 65.0
+ENABLE_SPATIAL_CHAOS_FILTER = True
+CHAOS_CELL_PX = 220
+CHAOS_LOCAL_ROI_LIMIT = 5
+CHAOS_KEEP_PER_CELL = 1
+CHAOS_SCORE_PENALTY = 40.0
+ENABLE_ADAPTIVE_TRACK_CONFIRM = True
+TRACK_CONFIRM_MIN_NET_MOTION_PX = 6.0 if HIGH_LAYER_MODE else 10.0
+TRACK_CONFIRM_RISK_MIN_NET_MOTION_PX = 10.0 if HIGH_LAYER_MODE else 16.0
+TRACK_CONFIRM_MIN_STRAIGHTNESS = 0.24 if HIGH_LAYER_MODE else 0.35
+TRACK_CONFIRM_RISK_MIN_STRAIGHTNESS = 0.45
+TRACK_CONFIRM_RISK_THRESHOLD = 0.45
+TRACK_CONFIRM_SMALL_BOX_MAX = 56
+TRACK_CONFIRM_SMALL_MIN_HITS = 6
+TRACK_CONFIRM_RISK_MIN_HITS = 7
 
 ROUGH_TARGET_WIDTH_M = 0.5
 CAM_H_FOV = 17.5
@@ -277,6 +296,8 @@ def apply_static_bg_mask(mask, gray, bg, tol):
     return cv2.bitwise_and(mask, changed)
 
 def cleanup_motion_mask(mask):
+    if ENABLE_MOTION_OPENING and MOTION_OPEN_ITER > 0:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MOTION_OPEN_KERNEL, iterations=MOTION_OPEN_ITER)
     if MOTION_ERODE_ITER > 0:
         mask = cv2.erode(mask, MOTION_ERODE_KERNEL, iterations=MOTION_ERODE_ITER)
     if MOTION_DILATE_ITER > 0:
@@ -396,6 +417,77 @@ def boost_roi_score(roi, boost):
         values.append(0.0)
     values[4] = float(values[4]) + float(boost)
     return tuple(values)
+
+def roi_is_padded_canvas(roi):
+    return len(roi) >= 8
+
+def get_roi_risk(roi):
+    if len(roi) >= 8:
+        return float(roi[7])
+    if len(roi) >= 6:
+        return float(roi[5])
+    return 0.0
+
+def set_roi_score_and_risk(roi, score, risk):
+    values = list(roi)
+    if len(values) < 5:
+        values.append(0.0)
+    values[4] = float(score)
+    risk = max(0.0, min(1.0, float(risk)))
+    if len(values) >= 8:
+        values[7] = risk
+    elif len(values) >= 6:
+        values[5] = risk
+    else:
+        values.append(risk)
+    return tuple(values)
+
+def edge_texture_risk(texture):
+    if not ENABLE_EDGE_DENSITY_FILTER:
+        return 0.0
+    texture = float(texture)
+    if texture <= EDGE_DENSITY_THRESH:
+        return 0.0
+    span = max(0.01, float(EDGE_DENSITY_SOFT_LIMIT) - float(EDGE_DENSITY_THRESH))
+    return max(0.0, min(1.0, (texture - float(EDGE_DENSITY_THRESH)) / span))
+
+def apply_spatial_chaos_filter(rois, full_w, full_h):
+    if not ENABLE_SPATIAL_CHAOS_FILTER or len(rois) < CHAOS_LOCAL_ROI_LIMIT:
+        return rois
+    cell_px = max(32, int(CHAOS_CELL_PX))
+    groups = {}
+    keys = []
+    for roi in rois:
+        cx = (float(roi[0]) + float(roi[2])) * 0.5
+        cy = (float(roi[1]) + float(roi[3])) * 0.5
+        key = (
+            max(0, min(int(full_w // cell_px), int(cx // cell_px))),
+            max(0, min(int(full_h // cell_px), int(cy // cell_px))),
+        )
+        groups.setdefault(key, []).append(roi)
+        keys.append(key)
+
+    local_counts = {}
+    for key in groups:
+        kx, ky = key
+        total = 0
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                total += len(groups.get((kx + dx, ky + dy), []))
+        local_counts[key] = total
+
+    filtered = []
+    for key, items in groups.items():
+        items = sorted(items, key=lambda r: float(r[4]) if len(r) > 4 else 0.0, reverse=True)
+        is_chaotic = local_counts.get(key, 0) >= CHAOS_LOCAL_ROI_LIMIT
+        if not is_chaotic:
+            filtered.extend(items)
+            continue
+        for roi in items[:max(1, int(CHAOS_KEEP_PER_CELL))]:
+            score = float(roi[4]) - float(CHAOS_SCORE_PENALTY)
+            risk = max(get_roi_risk(roi), 0.70)
+            filtered.append(set_roi_score_and_risk(roi, score, risk))
+    return filtered
 
 def crop_roi_from_center(cx, cy, full_w, full_h, crop_size=CROP_SIZE):
     half = crop_size // 2
@@ -683,6 +775,7 @@ def motion_rois_from_mask(mask, diff_img, edge_mask, gray, scale_x, scale_y, ful
         if area < MIN_DIFF_AREA:
             continue
         texture = edge_density(edge_mask, x, y, w, h)
+        roi_risk = edge_texture_risk(texture)
         active = mask_patch > 0
         local_diff = float(diff_img[y:y+h, x:x+w][active].mean()) if np.any(active) else 0.0
         if local_diff < MIN_LOCAL_DIFF_MEAN:
@@ -703,14 +796,12 @@ def motion_rois_from_mask(mask, diff_img, edge_mask, gray, scale_x, scale_y, ful
             and w <= MAX_DIFF_BOX_W
             and h <= MAX_DIFF_BOX_H
             and compactness >= FAR_MIN_COMPACTNESS
-            and texture <= EDGE_DENSITY_THRESH
         )
         is_near_compact = (
             area <= NEAR_MAX_DIFF_AREA
             and w <= NEAR_MAX_DIFF_BOX_W
             and h <= NEAR_MAX_DIFF_BOX_H
             and compactness >= NEAR_MIN_COMPACTNESS
-            and texture <= NEAR_EDGE_DENSITY_THRESH
         )
         if not (is_far_tiny or is_near_compact):
             continue
@@ -733,6 +824,7 @@ def motion_rois_from_mask(mask, diff_img, edge_mask, gray, scale_x, scale_y, ful
         else:
             score = local_diff + 10.0 * compactness - 0.015 * area - 20.0 * texture
         score += LCM_SCORE_WEIGHT * max(0.0, min(float(lcm_score), 8.0))
+        score -= EDGE_DENSITY_SCORE_PENALTY * roi_risk
 
         fx, fy = int(math.floor(x * scale_x)), int(math.floor(y * scale_y))
         fx2 = int(math.ceil((x + w) * scale_x))
@@ -757,6 +849,7 @@ def motion_rois_from_mask(mask, diff_img, edge_mask, gray, scale_x, scale_y, ful
                     score,
                     px,
                     py,
+                    roi_risk,
                 ))
                 continue
         rx1, ry1, rx2, ry2 = crop_roi_from_center(cx, cy, full_w, full_h)
@@ -766,7 +859,9 @@ def motion_rois_from_mask(mask, diff_img, edge_mask, gray, scale_x, scale_y, ful
             rx2,
             ry2,
             score,
+            roi_risk,
         ))
+    temp_rois = apply_spatial_chaos_filter(temp_rois, full_w, full_h)
     temp_rois.sort(key=lambda r: r[4], reverse=True)
     rois = merge_nearby_boxes(temp_rois, dist_thresh=300)
     rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
@@ -805,6 +900,11 @@ class TrajectoryFilter:
 
     def _det_score(self, box):
         return float(box[4]) if len(box) > 4 else CONF_THRESH
+
+    def _det_risk(self, box):
+        if len(box) > 5:
+            return self._clamp01(float(box[5]))
+        return 0.0
 
     def _clamp01(self, value):
         return max(0.0, min(1.0, float(value)))
@@ -902,6 +1002,34 @@ class TrajectoryFilter:
         if len(pts) < 3:
             return 0.0
         return math.sqrt((pts[-1][0] - pts[0][0])**2 + (pts[-1][1] - pts[0][1])**2)
+
+    def _adaptive_required_hits(self, trk):
+        if not ENABLE_ADAPTIVE_TRACK_CONFIRM:
+            return self.min_hits
+        required = int(self.min_hits)
+        risk = float(trk.get('bg_risk', 0.0))
+        max_side = max(float(trk.get('w', 1.0)), float(trk.get('h', 1.0)))
+        if risk >= TRACK_CONFIRM_RISK_THRESHOLD:
+            required = max(required, int(TRACK_CONFIRM_RISK_MIN_HITS))
+        elif (not HIGH_LAYER_MODE) and max_side <= TRACK_CONFIRM_SMALL_BOX_MAX:
+            required = max(required, int(TRACK_CONFIRM_SMALL_MIN_HITS))
+        return required
+
+    def _passes_motion_confirmation(self, trk):
+        if not ENABLE_ADAPTIVE_TRACK_CONFIRM:
+            return True
+        f = self._reference_features(trk)
+        duration = int(f['duration_frames'])
+        if duration < REF_TRAJ_MIN_DURATION:
+            return True
+        risk = float(trk.get('bg_risk', 0.0))
+        min_net = TRACK_CONFIRM_RISK_MIN_NET_MOTION_PX if risk >= TRACK_CONFIRM_RISK_THRESHOLD else TRACK_CONFIRM_MIN_NET_MOTION_PX
+        min_straight = TRACK_CONFIRM_RISK_MIN_STRAIGHTNESS if risk >= TRACK_CONFIRM_RISK_THRESHOLD else TRACK_CONFIRM_MIN_STRAIGHTNESS
+        if float(f['net_displacement_px']) < float(min_net):
+            return False
+        if float(f['straightness']) < float(min_straight):
+            return False
+        return True
 
     def _reference_features(self, trk):
         pts = np.array(list(trk.get('history', [])), dtype=np.float32)
@@ -1060,6 +1188,7 @@ class TrajectoryFilter:
             'misses': 0,
             'last_frame': int(frame_idx),
             'score': 0.35 + 0.35 * self._clamp01(self._det_score(det)),
+            'bg_risk': self._det_risk(det),
             'yolo_hits': 1,
             'history': deque([(cx, cy)], maxlen=self.recent_window),
             'frame_history': deque([int(frame_idx)], maxlen=self.recent_window),
@@ -1085,6 +1214,7 @@ class TrajectoryFilter:
         trk['yolo_hits'] = trk.get('yolo_hits', 0) + 1
         trk['misses'] = 0
         trk['score'] = self._clamp01(0.75 * trk['score'] + 0.25 * match_score)
+        trk['bg_risk'] = self._clamp01(0.70 * float(trk.get('bg_risk', 0.0)) + 0.30 * self._det_risk(det))
         trk['history'].append((cx, cy))
         trk['frame_history'].append(int(frame_idx))
         trk['hit_history'].append(1)
@@ -1105,14 +1235,17 @@ class TrajectoryFilter:
     def _basic_is_confirmed(self, trk):
         recent_hits = sum(trk['hit_history'])
         traj_score = self._trajectory_score(trk)
-        if trk.get('yolo_hits', 0) >= YOLO_DIRECT_CONFIRM_HITS:
+        required_hits = self._adaptive_required_hits(trk)
+        required_direct_hits = max(YOLO_DIRECT_CONFIRM_HITS, required_hits if float(trk.get('bg_risk', 0.0)) >= TRACK_CONFIRM_RISK_THRESHOLD else YOLO_DIRECT_CONFIRM_HITS)
+        required_direct_recent = max(YOLO_DIRECT_CONFIRM_RECENT_HITS, min(required_direct_hits, self.recent_window))
+        if trk.get('yolo_hits', 0) >= required_direct_hits:
             return (
-                recent_hits >= YOLO_DIRECT_CONFIRM_RECENT_HITS
+                recent_hits >= required_direct_recent
                 and trk['misses'] <= YOLO_DIRECT_CONFIRM_MAX_MISSES
                 and trk['score'] >= YOLO_DIRECT_CONFIRM_SCORE
             )
         return (
-            trk['hits'] >= self.min_hits
+            trk['hits'] >= required_hits
             and recent_hits >= self.min_recent_hits
             and trk['misses'] <= YOLO_TRACK_MAX_CONFIRMED_MISSES
             and trk['score'] >= self.confirm_score
@@ -1121,6 +1254,8 @@ class TrajectoryFilter:
 
     def _is_confirmed(self, trk):
         if not self._basic_is_confirmed(trk):
+            return False
+        if not self._passes_motion_confirmation(trk):
             return False
         if not ENABLE_REFERENCE_TRAJ_FILTER:
             return True
@@ -1248,12 +1383,13 @@ def inference_worker():
                 else:
                     roi, x, y = item
                     src_frame_idx = -1
+                roi_risk = float(item[4]) if len(item) >= 5 else 0.0
                 did_work = True
                 res = yolo.infer(roi)
                 rh, rw = roi.shape[:2]
                 if res is None:
                     res = []
-                put_latest(res_queues[i], (res, x, y, rw, rh, src_frame_idx))
+                put_latest(res_queues[i], (res, x, y, rw, rh, src_frame_idx, roi_risk))
             except queue.Empty: pass
         if not did_work: time.sleep(0.001)
     if yolo: yolo.release()
@@ -1404,7 +1540,8 @@ def capture_job(cam_idx):
                 frame_t1 = gray_small
             for roi in rois[:MAX_ROIS_PER_FRAME]:
                 x1, y1, x2, y2 = roi[:4]
-                use_padded_roi = ENABLE_TIGHT_MOTION_ROI and len(roi) > 6
+                roi_risk = get_roi_risk(roi)
+                use_padded_roi = ENABLE_TIGHT_MOTION_ROI and roi_is_padded_canvas(roi)
                 if use_padded_roi:
                     roi_img = make_padded_roi_canvas(
                         frame,
@@ -1423,7 +1560,7 @@ def capture_job(cam_idx):
                     origin_y = int(y1)
                 if roi_img.size == 0:
                     continue
-                if put_latest(inf_queues[cam_idx], (roi_img, origin_x, origin_y, f_idx)):
+                if put_latest(inf_queues[cam_idx], (roi_img, origin_x, origin_y, f_idx, roi_risk)):
                     sent_inference_this_frame = True
                     is_track_roi = tuple(int(v) for v in roi[:4]) in track_roi_keys
                     if is_track_roi:
@@ -1443,15 +1580,20 @@ def capture_job(cam_idx):
         while True:
             try:
                 result = res_queues[cam_idx].get_nowait()
-                if len(result) >= 6:
+                if len(result) >= 7:
+                    dets, xo, yo, roi_w, roi_h, src_frame_idx, roi_risk = result[:7]
+                elif len(result) >= 6:
                     dets, xo, yo, roi_w, roi_h, src_frame_idx = result[:6]
+                    roi_risk = 0.0
                 elif len(result) >= 5:
                     dets, xo, yo, roi_w, roi_h = result[:5]
                     src_frame_idx = f_idx
+                    roi_risk = 0.0
                 else:
                     dets, xo, yo = result
                     roi_w, roi_h = CROP_SIZE, CROP_SIZE
                     src_frame_idx = f_idx
+                    roi_risk = 0.0
                 if src_frame_idx >= 0 and f_idx - int(src_frame_idx) > MAX_INFERENCE_RESULT_AGE_FRAMES:
                     continue
                 got_inference_result = True
@@ -1465,6 +1607,7 @@ def capture_job(cam_idx):
                         int(max(0, min(W, d[2] * sx + xo))),
                         int(max(0, min(H, d[3] * sy + yo))),
                         score,
+                        float(roi_risk),
                     ]
                     if flicker_suppressor is not None and flicker_suppressor.is_blocked_full_box(
                         f_idx,
