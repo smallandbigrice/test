@@ -79,3 +79,29 @@ main
 1. 新建独立 Git 分支。
 2. 写本次 `main.py` 修改说明 Markdown。
 3. 提交并推送到 GitHub，保留历史版本可回溯。
+
+## 视频推理环境
+
+本机进行 `single_video_main_pt.py`、临时 PT 视频推理脚本时，默认使用：
+
+- Python: `D:\conda\python.exe`
+- 额外运行库路径需加入 `PATH`：
+  - `E:\detect uav\_runtime_dlls`
+  - `D:\conda`
+  - `D:\conda\Library\bin`
+  - `D:\conda\Scripts`
+
+推荐启动方式：
+
+```powershell
+$env:PYTHONNOUSERSITE='0'
+$env:PATH='E:\detect uav\_runtime_dlls;D:\conda;D:\conda\Library\bin;D:\conda\Scripts;' + $env:PATH
+python single_video_main_pt.py ...
+```
+
+说明：
+
+- 当前默认 `python` 实际指向 `D:\conda\python.exe`。
+- 但 `torch` 位于用户目录 `C:\Users\31379\AppData\Roaming\Python\Python311\site-packages`。
+- 如果不补齐上面的 DLL 路径，`torch` 可能报 `shm.dll` 或其依赖缺失，导致视频推理无法启动。
+- 后续凡是做 PC 端 PT 模型视频推理，优先沿用这套环境配置。
