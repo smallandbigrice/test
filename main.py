@@ -20,8 +20,8 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-low-layer-relaxed-lcm-20260615"
-ALGORITHM_NOTE = "Low-layer rollback to the validated PT video-inference variant: weaker morphology, relaxed LCM, gray-noise suppression off."
+ALGORITHM_VERSION = "frame-diff-global-dynamic-mask-20260615"
+ALGORITHM_NOTE = "Add a global 1-minute dynamic motion mask to suppress repeatedly moving background regions before ROI generation."
 N_CAM = 5                        
 INIT_TIME = 5                    
 USE_CAMERA_PROCESSES = True
@@ -86,6 +86,12 @@ REF_TRAJ_STATIONARY_MIN_DURATION = 15
 REF_TRAJ_STATIONARY_MAX_DISP = 4.0
 ENABLE_STATIC_BG_MASK = True
 ENABLE_LOW_LAYER_STATIC_BG_MASK = ENABLE_STATIC_BG_MASK
+ENABLE_DYNAMIC_MOTION_MASK = True
+DYNAMIC_MOTION_MASK_SECONDS = 60.0
+DYNAMIC_MOTION_MASK_SAMPLE_INTERVAL = 0.5
+DYNAMIC_MOTION_MASK_DIFF_THRESH = 8
+DYNAMIC_MOTION_MASK_HIT_RATIO = 0.12
+DYNAMIC_MOTION_MASK_MIN_PAIRS = 20
 ENABLE_TIGHT_MOTION_ROI = not HIGH_LAYER_MODE
 TIGHT_MOTION_ROI_PAD = 32
 TIGHT_MOTION_ROI_FILL = 114
@@ -295,6 +301,32 @@ def apply_static_bg_mask(mask, gray, bg, tol):
     bg_diff = cv2.absdiff(gray, bg)
     changed = (bg_diff > tol).astype(np.uint8) * 255
     return cv2.bitwise_and(mask, changed)
+
+def update_dynamic_motion_counts(prev_gray, curr_gray, hit_counts, diff_thresh):
+    if prev_gray is None or curr_gray is None or hit_counts is None:
+        return 0
+    aligned_prev = align_previous_gray(prev_gray, curr_gray)
+    diff_img = cv2.absdiff(aligned_prev, curr_gray)
+    _, dyn_mask = cv2.threshold(diff_img, int(diff_thresh), 255, cv2.THRESH_BINARY)
+    dyn_mask = cv2.dilate(dyn_mask, BG_DILATE_KERNEL, iterations=1)
+    dyn_mask = cv2.morphologyEx(dyn_mask, cv2.MORPH_CLOSE, BG_DILATE_KERNEL, iterations=1)
+    hit_counts += (dyn_mask > 0).astype(np.uint16)
+    return 1
+
+def finalize_dynamic_motion_mask(hit_counts, valid_pairs, hit_ratio):
+    if hit_counts is None or valid_pairs < max(1, int(DYNAMIC_MOTION_MASK_MIN_PAIRS)):
+        return None
+    freq = hit_counts.astype(np.float32) / float(max(1, valid_pairs))
+    dyn_mask = np.zeros_like(hit_counts, dtype=np.uint8)
+    dyn_mask[freq >= float(hit_ratio)] = 255
+    dyn_mask = cv2.morphologyEx(dyn_mask, cv2.MORPH_CLOSE, BG_DILATE_KERNEL, iterations=1)
+    dyn_mask = cv2.dilate(dyn_mask, BG_DILATE_KERNEL, iterations=1)
+    return dyn_mask
+
+def apply_dynamic_motion_mask(mask, dynamic_mask):
+    if not ENABLE_DYNAMIC_MOTION_MASK or dynamic_mask is None:
+        return mask
+    return cv2.bitwise_and(mask, cv2.bitwise_not(dynamic_mask))
 
 def cleanup_motion_mask(mask):
     if ENABLE_MOTION_OPENING and MOTION_OPEN_ITER > 0:
@@ -1433,6 +1465,12 @@ def capture_job(cam_idx):
     current_draw_boxes =[] 
     bg_samples = []
     bg_gray, bg_tol = None, None
+    dynamic_motion_mask = None
+    dynamic_motion_hits = np.zeros((DIFF_H, DIFF_W), dtype=np.uint16) if ENABLE_DYNAMIC_MOTION_MASK else None
+    dynamic_motion_prev_gray = None
+    dynamic_motion_pair_count = 0
+    dynamic_motion_start_ts = None
+    dynamic_motion_next_sample_ts = 0.0
     latest_fusion_mask = None
     last_tracker_update_frame = 0
 
@@ -1465,6 +1503,39 @@ def capture_job(cam_idx):
             else:
                 gray_small = cv2.resize(gray, (DIFF_W, DIFF_H), interpolation=cv2.INTER_AREA)
             scale_x, scale_y = W / float(DIFF_W), H / float(DIFF_H)
+
+            if ENABLE_DYNAMIC_MOTION_MASK and dynamic_motion_mask is None:
+                now_ts = time.time()
+                if dynamic_motion_start_ts is None:
+                    dynamic_motion_start_ts = now_ts
+                    dynamic_motion_next_sample_ts = now_ts
+                if now_ts >= dynamic_motion_next_sample_ts:
+                    if dynamic_motion_prev_gray is not None:
+                        dynamic_motion_pair_count += update_dynamic_motion_counts(
+                            dynamic_motion_prev_gray,
+                            gray_small,
+                            dynamic_motion_hits,
+                            DYNAMIC_MOTION_MASK_DIFF_THRESH,
+                        )
+                    dynamic_motion_prev_gray = gray_small.copy()
+                    dynamic_motion_next_sample_ts = now_ts + DYNAMIC_MOTION_MASK_SAMPLE_INTERVAL
+                if (
+                    dynamic_motion_start_ts is not None
+                    and (now_ts - dynamic_motion_start_ts) >= DYNAMIC_MOTION_MASK_SECONDS
+                ):
+                    dynamic_motion_mask = finalize_dynamic_motion_mask(
+                        dynamic_motion_hits,
+                        dynamic_motion_pair_count,
+                        DYNAMIC_MOTION_MASK_HIT_RATIO,
+                    )
+                    masked_pixels = int(cv2.countNonZero(dynamic_motion_mask)) if dynamic_motion_mask is not None else 0
+                    print(
+                        f"--> Cam {cam_idx} dynamic motion mask ready. "
+                        f"seconds={DYNAMIC_MOTION_MASK_SECONDS} pairs={dynamic_motion_pair_count} "
+                        f"masked_pixels={masked_pixels}",
+                        flush=True,
+                    )
+
             if ENABLE_LOW_LAYER_STATIC_BG_MASK and bg_gray is None:
                 bg_samples.append(gray_small.copy())
                 if len(bg_samples) >= LOW_BG_SAMPLE_FRAMES:
@@ -1487,6 +1558,7 @@ def capture_job(cam_idx):
                 diff_img = cv2.absdiff(aligned_t1, gray_small)
                 _, mask = cv2.threshold(diff_img, DIFF_THRESH, 255, cv2.THRESH_BINARY)
                 mask = apply_static_bg_mask(mask, gray_small, bg_gray, bg_tol)
+                mask = apply_dynamic_motion_mask(mask, dynamic_motion_mask)
                 mask = cleanup_motion_mask(mask)
                 fusion_mask = cv2.bitwise_or(fusion_mask, mask) if fusion_mask is not None else mask
                 edge_mask = build_edge_mask(gray_small)
