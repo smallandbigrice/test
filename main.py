@@ -20,8 +20,8 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-global-dynamic-mask-stagger10-20260616"
-ALGORITHM_NOTE = "Use default multi-process camera workers and stagger dynamic motion-mask learning by 10 seconds across cameras to reduce startup contention."
+ALGORITHM_VERSION = "frame-diff-global-dynamic-mask-serial-20260616"
+ALGORITHM_NOTE = "Use default multi-process camera workers and learn dynamic motion masks serially so only one camera is in the mask-learning stage at a time."
 N_CAM = 5                        
 INIT_TIME = 5                    
 
@@ -88,7 +88,8 @@ ENABLE_LOW_LAYER_STATIC_BG_MASK = ENABLE_STATIC_BG_MASK
 ENABLE_DYNAMIC_MOTION_MASK = True
 DYNAMIC_MOTION_MASK_SECONDS = 60.0
 DYNAMIC_MOTION_MASK_SAMPLE_INTERVAL = 0.5
-DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS = 10.0
+DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS = 0.0
+DYNAMIC_MOTION_MASK_SERIAL_GAP_SECONDS = 0.0
 DYNAMIC_MOTION_MASK_DIFF_THRESH = 8
 DYNAMIC_MOTION_MASK_HIT_RATIO = 0.12
 DYNAMIC_MOTION_MASK_MIN_PAIRS = 20
@@ -1505,12 +1506,14 @@ def capture_job(cam_idx):
             if ENABLE_DYNAMIC_MOTION_MASK and dynamic_motion_mask is None:
                 now_ts = time.time()
                 if dynamic_motion_start_ts is None:
-                    dynamic_motion_start_ts = SYSTEM_START_TIME + cam_idx * DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS
+                    per_cam_learning_span = DYNAMIC_MOTION_MASK_SECONDS + DYNAMIC_MOTION_MASK_SERIAL_GAP_SECONDS
+                    start_delay = cam_idx * per_cam_learning_span + DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS
+                    dynamic_motion_start_ts = SYSTEM_START_TIME + start_delay
                     dynamic_motion_next_sample_ts = dynamic_motion_start_ts
                     dynamic_motion_ready_deadline_ts = dynamic_motion_start_ts + DYNAMIC_MOTION_MASK_SECONDS
                     print(
                         f"--> Cam {cam_idx} dynamic motion mask scheduled. "
-                        f"start_delay={cam_idx * DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS:.1f}s "
+                        f"start_delay={start_delay:.1f}s "
                         f"window={DYNAMIC_MOTION_MASK_SECONDS:.1f}s",
                         flush=True,
                     )
@@ -1537,7 +1540,7 @@ def capture_job(cam_idx):
                         masked_pixels = int(cv2.countNonZero(dynamic_motion_mask)) if dynamic_motion_mask is not None else 0
                         print(
                             f"--> Cam {cam_idx} dynamic motion mask ready. "
-                            f"start_delay={cam_idx * DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS:.1f}s "
+                            f"start_delay={start_delay:.1f}s "
                             f"window={DYNAMIC_MOTION_MASK_SECONDS:.1f}s pairs={dynamic_motion_pair_count} "
                             f"masked_pixels={masked_pixels}",
                             flush=True,
