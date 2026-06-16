@@ -21,10 +21,9 @@ except Exception:
 # 1
 # ==========================================
 ALGORITHM_VERSION = "frame-diff-global-dynamic-mask-20260615"
-ALGORITHM_NOTE = "Add a global 1-minute dynamic motion mask to suppress repeatedly moving background regions before ROI generation."
+ALGORITHM_NOTE = "Use default multi-process camera workers and stagger dynamic motion-mask learning across cameras to reduce startup contention."
 N_CAM = 5                        
 INIT_TIME = 5                    
-USE_CAMERA_PROCESSES = True
 
 TRACKER_MIN_HITS = 4            
 TRACKER_MAX_DIST = 100           
@@ -89,6 +88,7 @@ ENABLE_LOW_LAYER_STATIC_BG_MASK = ENABLE_STATIC_BG_MASK
 ENABLE_DYNAMIC_MOTION_MASK = True
 DYNAMIC_MOTION_MASK_SECONDS = 60.0
 DYNAMIC_MOTION_MASK_SAMPLE_INTERVAL = 0.5
+DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS = 8.0
 DYNAMIC_MOTION_MASK_DIFF_THRESH = 8
 DYNAMIC_MOTION_MASK_HIT_RATIO = 0.12
 DYNAMIC_MOTION_MASK_MIN_PAIRS = 20
@@ -216,11 +216,8 @@ SYSTEM_START_TIME = time.time()
 INIT_SIGNAL_SENT = False
 VIDEO_STREAM_ALLOWED = False
 
-def init_runtime_ipc(use_camera_processes):
+def init_runtime_ipc():
     global inf_queues, res_queues, display_queues, stop_event, video_allowed_event
-    if not use_camera_processes:
-        video_allowed_event = None
-        return None
     try:
         ctx = mp.get_context("fork")
     except ValueError:
@@ -1471,6 +1468,7 @@ def capture_job(cam_idx):
     dynamic_motion_pair_count = 0
     dynamic_motion_start_ts = None
     dynamic_motion_next_sample_ts = 0.0
+    dynamic_motion_ready_deadline_ts = None
     latest_fusion_mask = None
     last_tracker_update_frame = 0
 
@@ -1507,34 +1505,43 @@ def capture_job(cam_idx):
             if ENABLE_DYNAMIC_MOTION_MASK and dynamic_motion_mask is None:
                 now_ts = time.time()
                 if dynamic_motion_start_ts is None:
-                    dynamic_motion_start_ts = now_ts
-                    dynamic_motion_next_sample_ts = now_ts
-                if now_ts >= dynamic_motion_next_sample_ts:
-                    if dynamic_motion_prev_gray is not None:
-                        dynamic_motion_pair_count += update_dynamic_motion_counts(
-                            dynamic_motion_prev_gray,
-                            gray_small,
-                            dynamic_motion_hits,
-                            DYNAMIC_MOTION_MASK_DIFF_THRESH,
-                        )
-                    dynamic_motion_prev_gray = gray_small.copy()
-                    dynamic_motion_next_sample_ts = now_ts + DYNAMIC_MOTION_MASK_SAMPLE_INTERVAL
-                if (
-                    dynamic_motion_start_ts is not None
-                    and (now_ts - dynamic_motion_start_ts) >= DYNAMIC_MOTION_MASK_SECONDS
-                ):
-                    dynamic_motion_mask = finalize_dynamic_motion_mask(
-                        dynamic_motion_hits,
-                        dynamic_motion_pair_count,
-                        DYNAMIC_MOTION_MASK_HIT_RATIO,
-                    )
-                    masked_pixels = int(cv2.countNonZero(dynamic_motion_mask)) if dynamic_motion_mask is not None else 0
+                    dynamic_motion_start_ts = SYSTEM_START_TIME + cam_idx * DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS
+                    dynamic_motion_next_sample_ts = dynamic_motion_start_ts
+                    dynamic_motion_ready_deadline_ts = dynamic_motion_start_ts + DYNAMIC_MOTION_MASK_SECONDS
                     print(
-                        f"--> Cam {cam_idx} dynamic motion mask ready. "
-                        f"seconds={DYNAMIC_MOTION_MASK_SECONDS} pairs={dynamic_motion_pair_count} "
-                        f"masked_pixels={masked_pixels}",
+                        f"--> Cam {cam_idx} dynamic motion mask scheduled. "
+                        f"start_delay={cam_idx * DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS:.1f}s "
+                        f"window={DYNAMIC_MOTION_MASK_SECONDS:.1f}s",
                         flush=True,
                     )
+                if now_ts >= dynamic_motion_start_ts:
+                    if now_ts >= dynamic_motion_next_sample_ts:
+                        if dynamic_motion_prev_gray is not None:
+                            dynamic_motion_pair_count += update_dynamic_motion_counts(
+                                dynamic_motion_prev_gray,
+                                gray_small,
+                                dynamic_motion_hits,
+                                DYNAMIC_MOTION_MASK_DIFF_THRESH,
+                            )
+                        dynamic_motion_prev_gray = gray_small.copy()
+                        dynamic_motion_next_sample_ts = now_ts + DYNAMIC_MOTION_MASK_SAMPLE_INTERVAL
+                    if (
+                        dynamic_motion_ready_deadline_ts is not None
+                        and now_ts >= dynamic_motion_ready_deadline_ts
+                    ):
+                        dynamic_motion_mask = finalize_dynamic_motion_mask(
+                            dynamic_motion_hits,
+                            dynamic_motion_pair_count,
+                            DYNAMIC_MOTION_MASK_HIT_RATIO,
+                        )
+                        masked_pixels = int(cv2.countNonZero(dynamic_motion_mask)) if dynamic_motion_mask is not None else 0
+                        print(
+                            f"--> Cam {cam_idx} dynamic motion mask ready. "
+                            f"start_delay={cam_idx * DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS:.1f}s "
+                            f"window={DYNAMIC_MOTION_MASK_SECONDS:.1f}s pairs={dynamic_motion_pair_count} "
+                            f"masked_pixels={masked_pixels}",
+                            flush=True,
+                        )
 
             if ENABLE_LOW_LAYER_STATIC_BG_MASK and bg_gray is None:
                 bg_samples.append(gray_small.copy())
@@ -1768,8 +1775,8 @@ def capture_job(cam_idx):
     cap.release()
 
 if __name__ == '__main__':
-    runtime_ctx = init_runtime_ipc(USE_CAMERA_PROCESSES)
-    use_camera_processes = USE_CAMERA_PROCESSES and runtime_ctx is not None
+    runtime_ctx = init_runtime_ipc()
+    use_camera_processes = runtime_ctx is not None
     latest_display_frames = [None for _ in range(N_CAM)]
     
     print(f"--> Detection enabled. version={ALGORITHM_VERSION}", flush=True)
