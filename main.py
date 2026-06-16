@@ -20,8 +20,8 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-global-dynamic-mask-20260615"
-ALGORITHM_NOTE = "Use default multi-process camera workers and stagger dynamic motion-mask learning across cameras to reduce startup contention."
+ALGORITHM_VERSION = "frame-diff-global-dynamic-mask-stagger10-20260616"
+ALGORITHM_NOTE = "Use default multi-process camera workers and stagger dynamic motion-mask learning by 10 seconds across cameras to reduce startup contention."
 N_CAM = 5                        
 INIT_TIME = 5                    
 
@@ -88,7 +88,7 @@ ENABLE_LOW_LAYER_STATIC_BG_MASK = ENABLE_STATIC_BG_MASK
 ENABLE_DYNAMIC_MOTION_MASK = True
 DYNAMIC_MOTION_MASK_SECONDS = 60.0
 DYNAMIC_MOTION_MASK_SAMPLE_INTERVAL = 0.5
-DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS = 8.0
+DYNAMIC_MOTION_MASK_START_STAGGER_SECONDS = 10.0
 DYNAMIC_MOTION_MASK_DIFF_THRESH = 8
 DYNAMIC_MOTION_MASK_HIT_RATIO = 0.12
 DYNAMIC_MOTION_MASK_MIN_PAIRS = 20
