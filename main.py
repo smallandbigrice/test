@@ -33,7 +33,7 @@ ENABLE_SUPPRESSOR = False
 TRACKER_MIN_HITS = 3             # 视频测试可稍微降低门槛
 TRACKER_MAX_AGE = 20             
 TRACKER_MAX_DIST = 100           
-CONF_THRESH = 0.50               
+CONF_THRESH = 0.40               
 
 BOARD_ID = "BOARD_9" 
 BOARD_ROW_IDX = 0  
@@ -51,7 +51,7 @@ DIFF_THRESH = 20
 MIN_OBJ_SIZE = 20                
 MAX_ROIS_PER_FRAME = 6           
 DIFF_W, DIFF_H = 1920, 1080
-MODEL_PATH = '../model/yolov5s_fp16.rknn'
+MODEL_PATH = '../model/yolov5s.rknn'
 
 UAV_REAL_WIDTH_M = 0.5   
 CAM_H_FOV = 17.5         
