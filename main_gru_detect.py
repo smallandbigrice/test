@@ -439,6 +439,8 @@ class FeatureTracker:
             drone_pos = None
             is_valid = False
             
+        return drone_pos, self.last_valid_offset, is_valid
+            
     def get_track_features(self, track):
         x = np.array([pt['x'] for pt in track.history_buffer], dtype=np.float64)
         y = np.array([pt['y'] for pt in track.history_buffer], dtype=np.float64)
@@ -483,8 +485,6 @@ class FeatureTracker:
             
         features = np.stack(feature_list, axis=-1)
         return features.astype(np.float32)
-
-        return drone_pos, self.last_valid_offset, is_valid
 
 
 
