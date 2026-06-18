@@ -8,10 +8,25 @@ import numpy as np
 import subprocess
 import math
 from collections import deque
-from scipy.signal import savgol_filter
 import torch
 import torch.nn as nn
 from comms import DataSender, VideoSender
+
+# ==========================================
+# 0. 辅助算法：用 NumPy 替代 SciPy 以去除依赖
+# ==========================================
+def savgol_filter_numpy(y: np.ndarray, window_size: int = 5, polyorder: int = 2) -> np.ndarray:
+    """
+    零依赖的 NumPy 版本 Savitzky-Golay 滤波器 (仅针对 window_size=5, polyorder=2)
+    """
+    if len(y) < window_size:
+        return y
+    # 对于 window_size=5, polyorder=2, 中心滤波系数为: [-3, 12, 17, 12, -3] / 35
+    coeffs = np.array([-3.0, 12.0, 17.0, 12.0, -3.0]) / 35.0
+    # 对边界使用最近的边界值做 padding 镜像填充，保证滑动窗口在边缘不发散且输出等长
+    padded = np.pad(y, (2, 2), mode='edge')
+    smoothed = np.convolve(padded, coeffs, mode='valid')
+    return smoothed
 
 try:
     cv2.setNumThreads(1)
@@ -493,8 +508,8 @@ class FeatureTracker:
         conf = np.array([pt['conf'] for pt in track.history_buffer], dtype=np.float64)
         
         if self.smooth and len(x) >= 5:
-            x = savgol_filter(x, 5, 2)
-            y = savgol_filter(y, 5, 2)
+            x = savgol_filter_numpy(x, 5, 2)
+            y = savgol_filter_numpy(y, 5, 2)
             
         if self.normalize:
             w_ref = getattr(self, "width", 1280.0)
