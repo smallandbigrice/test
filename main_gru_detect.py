@@ -12,19 +12,7 @@ from comms import DataSender, VideoSender
 
 # ==========================================
 # 0. 辅助算法：用 NumPy 替代 SciPy 以去除依赖
-# ==========================================
-def savgol_filter_numpy(y: np.ndarray, window_size: int = 5, polyorder: int = 2) -> np.ndarray:
-    """
-    零依赖的 NumPy 版本 Savitzky-Golay 滤波器 (仅针对 window_size=5, polyorder=2)
-    """
-    if len(y) < window_size:
-        return y
-    # 对于 window_size=5, polyorder=2, 中心滤波系数为: [-3, 12, 17, 12, -3] / 35
-    coeffs = np.array([-3.0, 12.0, 17.0, 12.0, -3.0]) / 35.0
-    # 对边界使用最近的边界值做 padding 镜像填充，保证滑动窗口在边缘不发散且输出等长
-    padded = np.pad(y, (2, 2), mode='edge')
-    smoothed = np.convolve(padded, coeffs, mode='valid')
-    return smoothed
+
 
 try:
     cv2.setNumThreads(1)
@@ -424,50 +412,7 @@ class FeatureTracker:
             
         return drone_pos, self.last_valid_offset, is_valid
 
-    def get_track_features(self, track: Track):
-        x = np.array([pt['x'] for pt in track.history_buffer], dtype=np.float64)
-        y = np.array([pt['y'] for pt in track.history_buffer], dtype=np.float64)
-        w = np.array([pt['w'] for pt in track.history_buffer], dtype=np.float64)
-        h = np.array([pt['h'] for pt in track.history_buffer], dtype=np.float64)
-        conf = np.array([pt['conf'] for pt in track.history_buffer], dtype=np.float64)
-        
-        if self.smooth and len(x) >= 5:
-            x = savgol_filter_numpy(x, 5, 2)
-            y = savgol_filter_numpy(y, 5, 2)
-            
-        if self.normalize:
-            w_ref = getattr(self, "width", 1280.0)
-            h_ref = getattr(self, "height", 720.0)
-            x_norm = x / (2.0 * w_ref)
-            y_norm = y / (2.0 * h_ref)
-            w_norm = w / (2.0 * w_ref)
-            h_norm = h / (2.0 * h_ref)
-        else:
-            x_norm = x
-            y_norm = y
-            w_norm = w
-            h_norm = h
-            
-        relative_x = x_norm - x_norm[0]
-        relative_y = y_norm - y_norm[0]
-        
-        velocity_x = np.diff(x_norm, prepend=x_norm[0])
-        velocity_y = np.diff(y_norm, prepend=y_norm[0])
-        
-        acceleration_x = np.diff(velocity_x, prepend=velocity_x[0])
-        acceleration_y = np.diff(velocity_y, prepend=velocity_y[0])
-        
-        feature_list = [
-            x_norm, y_norm, relative_x, relative_y,
-            velocity_x, velocity_y, acceleration_x, acceleration_y
-        ]
-        
-        if self.input_dim == 12:
-            aspect_ratio = w_norm / (h_norm + 1e-8)
-            feature_list.extend([w_norm, h_norm, aspect_ratio, conf])
-            
-        features = np.stack(feature_list, axis=-1)
-        return features.astype(np.float32)
+
 
 # ==========================================
 # 4. 辅助函数
