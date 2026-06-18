@@ -61,7 +61,7 @@ CAM_MAP = {i: f"00000000{i+1}" for i in range(5)}
 # 3. 追踪与检测处理器类
 # ==========================================
 class Track:
-    def __init__(self, track_id: int, first_pos: Tuple[float, float], w: float = 50.0, h: float = 50.0, conf: float = 1.0):
+    def __init__(self, track_id, first_pos, w=50.0, h=50.0, conf=1.0):
         self.track_id = track_id
         self.history_buffer = []
         self.history_buffer.append({
@@ -80,7 +80,7 @@ class Track:
         self.smooth_w = w
         self.smooth_h = h
 
-    def update_smooth_filter(self, px: float, py: float, w: float, h: float, alpha: float = 0.65):
+    def update_smooth_filter(self, px, py, w, h, alpha=0.65):
         self.smooth_px = alpha * px + (1.0 - alpha) * self.smooth_px
         self.smooth_py = alpha * py + (1.0 - alpha) * self.smooth_py
         self.smooth_w = alpha * w + (1.0 - alpha) * self.smooth_w
@@ -108,7 +108,7 @@ class FeatureTracker:
         self.max_drone_move = 60.0
         self.max_missing_frames = 10
 
-    def detect_all_centroids(self, frame: np.ndarray, thresh_val: int = 120):
+    def detect_all_centroids(self, frame, thresh_val=120):
         height, width = frame.shape[:2]
         self.height, self.width = height, width
         
@@ -185,7 +185,7 @@ class FeatureTracker:
         bound_id = self._find_csv_bound_track_id(csv_row)
         return bound_id == track.track_id
 
-    def update(self, frame: np.ndarray, csv_row = None):
+    def update(self, frame, csv_row=None):
         height, width = frame.shape[:2]
         self.height, self.width = height, width
         
