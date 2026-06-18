@@ -31,8 +31,10 @@ INIT_TIME = 2                    # 测试时缩短初始化时间
 # 🚀 调优后的超参数 🚀
 ENABLE_SUPPRESSOR = False        
 TRACKER_MIN_HITS = 3             # 视频测试可稍微降低门槛
-TRACKER_MAX_AGE = 20             
+TRACKER_MAX_AGE = 12
 TRACKER_MAX_DIST = 100           
+TRACKER_GREEN_HOLD_FRAMES = 4
+MAX_INFERENCE_RESULT_AGE_FRAMES = 6
 CONF_THRESH = 0.40               
 
 BOARD_ID = "BOARD_9" 
@@ -77,6 +79,21 @@ stop_event = threading.Event()
 SYSTEM_START_TIME = time.time()
 VIDEO_STREAM_ALLOWED = True 
 
+def put_latest(q, item):
+    try:
+        q.put_nowait(item)
+        return True
+    except queue.Full:
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(item)
+            return True
+        except queue.Full:
+            return False
+
 # ==========================================
 # 3. 核心辅助函数 (保持不变)
 # ==========================================
@@ -107,9 +124,19 @@ def merge_nearby_boxes(boxes, dist_thresh=120):
     return merged
 
 class TrajectoryFilter:
-    def __init__(self, max_dist=100, min_hits=4, max_age=15): 
+    def __init__(self, max_dist=100, min_hits=4, max_age=15, hold_age=4):
         self.trackers =[] 
         self.max_dist, self.min_hits, self.max_age = max_dist, min_hits, max_age
+        self.hold_age = hold_age
+
+    @staticmethod
+    def _predicted_box(trk):
+        box = trk['box']
+        age = trk['age']
+        dx = trk.get('vx', 0.0) * age
+        dy = trk.get('vy', 0.0) * age
+        return [box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy]
+
     def update(self, detections):
         for trk in self.trackers: trk['age'] += 1
         matched_indices =[]
@@ -118,17 +145,34 @@ class TrajectoryFilter:
             best_dist, best_idx = float('inf'), -1
             for i, trk in enumerate(self.trackers):
                 if i in matched_indices: continue
-                tcx, tcy = (trk['box'][0]+trk['box'][2])/2, (trk['box'][1]+trk['box'][3])/2
+                predicted = self._predicted_box(trk)
+                tcx, tcy = (predicted[0]+predicted[2])/2, (predicted[1]+predicted[3])/2
                 dist = math.sqrt((cx-tcx)**2 + (cy-tcy)**2)
                 if dist < self.max_dist and dist < best_dist:
                     best_dist, best_idx = dist, i
             if best_idx != -1:
-                self.trackers[best_idx].update({'box': det, 'hits': self.trackers[best_idx]['hits']+1, 'age': 0})
+                trk = self.trackers[best_idx]
+                old_cx = (trk['box'][0] + trk['box'][2]) / 2.0
+                old_cy = (trk['box'][1] + trk['box'][3]) / 2.0
+                dt = max(1, trk['age'])
+                observed_vx = (cx - old_cx) / dt
+                observed_vy = (cy - old_cy) / dt
+                trk.update({
+                    'box': det,
+                    'hits': trk['hits'] + 1,
+                    'age': 0,
+                    'vx': 0.5 * trk.get('vx', 0.0) + 0.5 * observed_vx,
+                    'vy': 0.5 * trk.get('vy', 0.0) + 0.5 * observed_vy,
+                })
                 matched_indices.append(best_idx)
             else:
-                self.trackers.append({'box': det, 'hits': 1, 'age': 0})
-        self.trackers = [t for t in self.trackers if t['age'] < self.max_age]
-        return [t['box'] for t in self.trackers if t['hits'] >= self.min_hits]
+                self.trackers.append({'box': det, 'hits': 1, 'age': 0, 'vx': 0.0, 'vy': 0.0})
+        self.trackers = [t for t in self.trackers if t['age'] <= self.max_age]
+        return [
+            self._predicted_box(t)
+            for t in self.trackers
+            if t['hits'] >= self.min_hits and t['age'] <= self.hold_age
+        ]
 
 # ==========================================
 # 4. 推理线程 (保持不变)
@@ -144,10 +188,11 @@ def inference_worker():
         did_work = False
         for i in range(N_CAM):
             try:
-                roi, x, y = inf_queues[i].get_nowait()
+                roi, x, y, src_frame_idx = inf_queues[i].get_nowait()
                 did_work = True
                 res = yolo.infer(roi)
-                if res is not None: res_queues[i].put_nowait((res, x, y))
+                if res is not None:
+                    put_latest(res_queues[i], (res, x, y, src_frame_idx))
             except queue.Empty: pass
         if not did_work: time.sleep(0.001)
     if yolo: yolo.release()
@@ -164,7 +209,12 @@ def video_test_job(cam_idx, video_path):
         return
 
     frame_t1, frame_t2 = None, None
-    tracker = TrajectoryFilter(max_dist=TRACKER_MAX_DIST, min_hits=TRACKER_MIN_HITS, max_age=TRACKER_MAX_AGE) 
+    tracker = TrajectoryFilter(
+        max_dist=TRACKER_MAX_DIST,
+        min_hits=TRACKER_MIN_HITS,
+        max_age=TRACKER_MAX_AGE,
+        hold_age=TRACKER_GREEN_HOLD_FRAMES,
+    )
     
     f_idx = 0 
     v_sender = video_senders[cam_idx]
@@ -217,14 +267,15 @@ def video_test_job(cam_idx, video_path):
             frame_t2, frame_t1 = frame_t1, gray_small
             for (x1, y1, x2, y2) in rois[:MAX_ROIS_PER_FRAME]:
                 current_draw_boxes.append([x1, y1, x2, y2, (255, 255, 255), "ROI", 2])
-                try: inf_queues[cam_idx].put_nowait((frame[y1:y2, x1:x2].copy(), x1, y1))
-                except: pass
+                put_latest(inf_queues[cam_idx], (frame[y1:y2, x1:x2].copy(), x1, y1, f_idx))
 
         # 2. 接收推理结果
         raw_boxes_in_this_frame =[]
         while True:
             try:
-                dets, xo, yo = res_queues[cam_idx].get_nowait()
+                dets, xo, yo, src_frame_idx = res_queues[cam_idx].get_nowait()
+                if f_idx - src_frame_idx > MAX_INFERENCE_RESULT_AGE_FRAMES:
+                    continue
                 for d in dets:
                     raw_boxes_in_this_frame.append([int(d[0]+xo), int(d[1]+yo), int(d[2]+xo), int(d[3]+yo)])
             except queue.Empty: break
@@ -237,7 +288,7 @@ def video_test_job(cam_idx, video_path):
         confirmed = tracker.update(unique_raw_boxes)
         valid_objs = []
         for box in confirmed:
-            current_draw_boxes.append([box[0], box[1], box[2], box[3], (0, 255, 0), "TARGET", 3])
+            current_draw_boxes.append([box[0], box[1], box[2], box[3], (0, 255, 0), "TARGET", 1])
             # 计算空间坐标
             az, el, dist = calculate_spatial_status(target_hw_id, box)
             valid_objs.append({"azimuth": az, "elevation": el, "distance_m": dist})
@@ -264,8 +315,7 @@ def video_test_job(cam_idx, video_path):
         if VIDEO_STREAM_ALLOWED: v_sender.send(BOARD_ID, cam_idx, show_frame)
         
         # 存入显示队列
-        try: display_queues[cam_idx].put_nowait(show_frame)
-        except: pass
+        put_latest(display_queues[cam_idx], show_frame)
 
     cap.release()
 
