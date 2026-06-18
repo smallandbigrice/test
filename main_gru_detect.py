@@ -8,13 +8,6 @@ import numpy as np
 import subprocess
 import math
 from collections import deque
-try:
-    import torch
-    import torch.nn as nn
-    HAS_TORCH = True
-except ImportError:
-    HAS_TORCH = False
-
 from comms import DataSender, VideoSender
 
 # ==========================================
@@ -73,89 +66,8 @@ ROUGH_RANGE_ROUND_M = 10
 CAM_MAP = {i: f"00000000{i+1}" for i in range(5)}
 
 # ==========================================
-# 2. 神经网络模型定义
+# 2. 神经网络模型定义 (已彻底移除 PyTorch 与 GRU 模型，改用纯 OpenCV 级联追踪判定)
 # ==========================================
-if HAS_TORCH:
-    class UAVTrajectoryNet(nn.Module):
-        def __init__(
-            self,
-            input_dim: int = 8,
-            hidden_dim: int = 32,
-            num_layers: int = 1,
-            future_steps: int = 5,
-            dropout: float = 0.1,
-        ):
-            super().__init__()
-            self.future_steps = future_steps
-            self.hidden_dim = hidden_dim
-            self.input_dim = input_dim
-            self.gru = nn.GRU(
-                input_size=input_dim,
-                hidden_size=hidden_dim,
-                num_layers=num_layers,
-                batch_first=True,
-                dropout=dropout if num_layers > 1 else 0,
-            )
-            self.classifier = nn.Sequential(
-                nn.Linear(hidden_dim, 16),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(16, 1),
-            )
-            self.predictor = nn.Sequential(
-                nn.Linear(hidden_dim, 32),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(32, future_steps * 2),
-            )
-            self._init_weights()
-        
-        def _init_weights(self):
-            for m in self.modules():
-                if isinstance(m, nn.Linear):
-                    nn.init.xavier_uniform_(m.weight)
-                    if m.bias is not None:
-                        nn.init.zeros_(m.bias)
-                elif isinstance(m, nn.GRU):
-                    for name, param in m.named_parameters():
-                        if 'weight' in name:
-                            nn.init.orthogonal_(param)
-                        elif 'bias' in name:
-                            nn.init.zeros_(param)
-        
-        def forward(self, x: torch.Tensor):
-            if x.ndim != 3:
-                raise ValueError(f"Input must be 3D tensor [B,T,F], received {x.shape}")
-            if x.shape[-1] != self.input_dim:
-                raise ValueError(f"Input feature dim must be {self.input_dim}, received {x.shape[-1]}")
-            gru_out, hidden = self.gru(x)
-            last_hidden = hidden[-1]
-            logits = self.classifier(last_hidden)
-            pred = self.predictor(last_hidden)
-            future_offsets = pred.view(-1, self.future_steps, 2)
-            return logits, future_offsets
-        
-        @staticmethod
-        def load_from_checkpoint(path: str, device: str = "cpu") -> "UAVTrajectoryNet":
-            checkpoint = torch.load(path, map_location=device, weights_only=True)
-            config = checkpoint.get("model_config", {})
-            model = UAVTrajectoryNet(
-                input_dim=config.get("input_dim", 8),
-                hidden_dim=config.get("hidden_dim", 32),
-                num_layers=config.get("num_layers", 1),
-                future_steps=config.get("future_steps", 5),
-                dropout=config.get("dropout", 0.1),
-            )
-            model.load_state_dict(checkpoint["model_state_dict"])
-            model.to(device)
-            model.eval()
-            return model
-else:
-    class UAVTrajectoryNet:
-        @staticmethod
-        def load_from_checkpoint(path: str, device: str = "cpu"):
-            print(f"[WARN] PyTorch (torch) is not installed. GRU model loading from {path} is bypassed.", flush=True)
-            return None
 
 # ==========================================
 # 3. 追踪与检测处理器类
@@ -632,13 +544,6 @@ def capture_job(cam_idx):
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     tracker = FeatureTracker(seq_len=20, input_dim=8, smooth=True, normalize=True)
-    try:
-        gru_model = UAVTrajectoryNet.load_from_checkpoint("model/gru_baseline.pth", device="cpu")
-        gru_model.eval()
-        print(f"--> Cam {cam_idx} GRU Model Loaded.", flush=True)
-    except Exception as e:
-        print(f"--> Cam {cam_idx} failed to load GRU model: {e}", flush=True)
-        gru_model = None
 
     f_idx = 0
     local_data_sender = DataSender(DATA_TARGETS, BOARD_ID)
@@ -674,43 +579,15 @@ def capture_job(cam_idx):
             input_frame = gray_frame if gray_frame is not None else frame
             drone_pos, _, is_valid = tracker.update(input_frame)
             
-            # B. 对所有的轨迹运行 GRU 时序噪点判定与未来轨迹预测
-            if gru_model is not None:
-                for tid, track in tracker.tracks.items():
-                    if len(track.history_buffer) == tracker.seq_len:
-                        features_np = tracker.get_track_features(track)
-                        features_t = torch.tensor(features_np, dtype=torch.float32).unsqueeze(0)
-                        
-                        with torch.no_grad():
-                            logits, pred_offsets = gru_model(features_t)
-                            pred_offsets = pred_offsets.squeeze(0).numpy()
-                            prob = torch.sigmoid(logits).item()
-                            
-                        track.classification_prob = prob
-                        track.is_uav = prob >= 0.60 # 分类置信度判定阈值0.60
-                        
-                        current_x, current_y = track.smooth_px, track.smooth_py
-                        scale_x = W / 2.0
-                        scale_y = H / 2.0
-                        
-                        track_pred = []
-                        for off in pred_offsets:
-                            track_pred.append((int(current_x + off[0] * scale_x), int(current_y + off[1] * scale_y)))
-                        track.pred_coords = track_pred
-                    else:
-                        track.classification_prob = None
-                        track.is_uav = False
-                        track.pred_coords = []
-            else:
-                # 降级回退 (Fallback)：若无 GRU，使用基于追踪历史帧数的启发式规则
-                for tid, track in tracker.tracks.items():
-                    if len(track.history_buffer) >= 5:
-                        track.classification_prob = 1.0
-                        track.is_uav = True
-                    else:
-                        track.classification_prob = None
-                        track.is_uav = False
-                    track.pred_coords = []
+            # B. 对所有的活跃轨迹基于持续帧数进行 UAV 认定 (3588 CPU 极简直接判定，不使用 GRU 模型)
+            for tid, track in tracker.tracks.items():
+                if len(track.history_buffer) >= 5:
+                    track.classification_prob = 1.0
+                    track.is_uav = True
+                else:
+                    track.classification_prob = None
+                    track.is_uav = False
+                track.pred_coords = []
                         
             # C. 选取唯一黄金主轨迹进行高亮展示和云台发数
             primary_track = None
