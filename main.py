@@ -20,10 +20,11 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-dynamic-background-model-20260616"
-ALGORITHM_NOTE = "Use default multi-process camera workers and learn a serial dynamic background model that widens background tolerance for repeatedly moving regions."
+ALGORITHM_VERSION = "frame-diff-static-bg-raw-roi-20260618"
+ALGORITHM_NOTE = "Use static background masking and send the original cropped ROI to YOLO without feature fusion or padded canvas."
 N_CAM = 5                        
 INIT_TIME = 5                    
+VIDEO_TEST_PATH = "./4.mp4"
 
 TRACKER_MIN_HITS = 4            
 TRACKER_MAX_DIST = 100           
@@ -85,13 +86,6 @@ REF_TRAJ_STATIONARY_MIN_DURATION = 15
 REF_TRAJ_STATIONARY_MAX_DISP = 4.0
 ENABLE_STATIC_BG_MASK = True
 ENABLE_LOW_LAYER_STATIC_BG_MASK = ENABLE_STATIC_BG_MASK
-ENABLE_DYNAMIC_BG_MODEL = True
-DYNAMIC_BG_SECONDS = 60.0
-DYNAMIC_BG_SAMPLE_INTERVAL = 0.5
-DYNAMIC_BG_START_DELAY_SECONDS = 0.0
-DYNAMIC_BG_SERIAL_GAP_SECONDS = 0.0
-DYNAMIC_BG_ABS_DELTA = 20
-DYNAMIC_BG_STD_MULT = 5.0
 ENABLE_TIGHT_MOTION_ROI = not HIGH_LAYER_MODE
 TIGHT_MOTION_ROI_PAD = 32
 TIGHT_MOTION_ROI_FILL = 114
@@ -116,8 +110,6 @@ ENABLE_FRAME_DIFF_ROIS = True
 DIFF_THRESH = 8
 MIN_LOCAL_DIFF_MEAN = 10.0
 ENABLE_GRAY_NOISE_SUPPRESSOR = False
-ENABLE_FUSION_INFERENCE = True
-ENABLE_FUSION_DISPLAY = True
 FUSION_REQUIRE_TRACK_MOTION = True
 FUSION_TRACK_MIN_PIXELS = 3
 FUSION_TRACK_CENTER_SIZE = 120
@@ -299,15 +291,6 @@ def apply_static_bg_mask(mask, gray, bg, tol):
     changed = (bg_diff > tol).astype(np.uint8) * 255
     return cv2.bitwise_and(mask, changed)
 
-def build_dynamic_bg_model(samples):
-    if not samples:
-        return None, None
-    stack = np.stack(samples, axis=0).astype(np.float32)
-    bg = np.median(stack, axis=0).astype(np.uint8)
-    std = np.std(stack, axis=0)
-    tol = np.clip(DYNAMIC_BG_ABS_DELTA + DYNAMIC_BG_STD_MULT * std, DYNAMIC_BG_ABS_DELTA, 255).astype(np.uint8)
-    return bg, tol
-
 def cleanup_motion_mask(mask):
     if ENABLE_MOTION_OPENING and MOTION_OPEN_ITER > 0:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MOTION_OPEN_KERNEL, iterations=MOTION_OPEN_ITER)
@@ -318,77 +301,6 @@ def cleanup_motion_mask(mask):
     if MOTION_CLOSE_ITER > 0:
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MOTION_CLOSE_KERNEL, iterations=MOTION_CLOSE_ITER)
     return mask
-
-def make_fused_roi(frame, mask_small, roi_box, full_w, full_h):
-    x1, y1, x2, y2 = [int(v) for v in roi_box[:4]]
-    roi = frame[y1:y2, x1:x2]
-    if roi.size == 0:
-        return roi
-    gray_roi = frame_to_gray(roi)
-    if mask_small is None:
-        mask_roi = np.zeros_like(gray_roi)
-    else:
-        sx = mask_small.shape[1] / float(max(1, full_w))
-        sy = mask_small.shape[0] / float(max(1, full_h))
-        mx1 = max(0, min(mask_small.shape[1] - 1, int(round(x1 * sx))))
-        my1 = max(0, min(mask_small.shape[0] - 1, int(round(y1 * sy))))
-        mx2 = max(0, min(mask_small.shape[1], int(round(x2 * sx))))
-        my2 = max(0, min(mask_small.shape[0], int(round(y2 * sy))))
-        mask_patch = mask_small[my1:my2, mx1:mx2]
-        if mask_patch.size == 0:
-            mask_roi = np.zeros_like(gray_roi)
-        else:
-            mask_roi = cv2.resize(mask_patch, (gray_roi.shape[1], gray_roi.shape[0]), interpolation=cv2.INTER_NEAREST)
-    return cv2.merge([gray_roi, gray_roi, mask_roi])
-
-def make_padded_roi_canvas(frame, mask_small, roi_info, full_w, full_h, fusion=True, crop_size=CROP_SIZE, fill_value=114):
-    x1, y1, x2, y2 = [int(v) for v in roi_info[:4]]
-    pad_x = int(roi_info[5]) if len(roi_info) > 5 else 0
-    pad_y = int(roi_info[6]) if len(roi_info) > 6 else 0
-    src_w = max(0, x2 - x1)
-    src_h = max(0, y2 - y1)
-    if src_w <= 0 or src_h <= 0:
-        return np.empty((0, 0, 3), dtype=np.uint8)
-
-    if fusion:
-        patch = make_fused_roi(frame, mask_small, (x1, y1, x2, y2), full_w, full_h)
-        canvas = np.zeros((crop_size, crop_size, 3), dtype=np.uint8)
-        canvas[:, :, 0] = np.uint8(fill_value)
-        canvas[:, :, 1] = np.uint8(fill_value)
-    else:
-        patch = frame[y1:y2, x1:x2]
-        canvas = np.full((crop_size, crop_size, 3), np.uint8(fill_value), dtype=np.uint8)
-
-    if patch.size == 0:
-        return patch
-
-    dst_x1 = max(0, min(crop_size, pad_x))
-    dst_y1 = max(0, min(crop_size, pad_y))
-    dst_x2 = min(crop_size, dst_x1 + patch.shape[1])
-    dst_y2 = min(crop_size, dst_y1 + patch.shape[0])
-    if dst_x2 <= dst_x1 or dst_y2 <= dst_y1:
-        return canvas
-    canvas[dst_y1:dst_y2, dst_x1:dst_x2] = patch[:dst_y2 - dst_y1, :dst_x2 - dst_x1]
-    return canvas
-
-def make_fused_display_frame(frame, mask_small, full_w, full_h):
-    gray = frame_to_gray(frame)
-    if mask_small is None:
-        mask_full = np.zeros_like(gray)
-    elif mask_small.shape[1] == gray.shape[1] and mask_small.shape[0] == gray.shape[0]:
-        mask_full = mask_small
-    else:
-        mask_full = cv2.resize(mask_small, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST)
-    return cv2.merge([gray, gray, mask_full])
-
-def make_fused_display_preview(frame, mask_small, out_w=640, out_h=360):
-    gray = frame_to_gray(frame)
-    gray_preview = cv2.resize(gray, (out_w, out_h), interpolation=cv2.INTER_AREA)
-    if mask_small is None:
-        mask_preview = np.zeros((out_h, out_w), dtype=np.uint8)
-    else:
-        mask_preview = cv2.resize(mask_small, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
-    return cv2.merge([gray_preview, gray_preview, mask_preview])
 
 def track_roi_has_motion(track_roi, mask_small, full_w, full_h, min_pixels=FUSION_TRACK_MIN_PIXELS, center_size=FUSION_TRACK_CENTER_SIZE):
     if mask_small is None:
@@ -1414,15 +1326,8 @@ def inference_worker():
 # ==========================================
 def capture_job(cam_idx):
     if cam_idx not in CAM_MAP: return
-    target_hw_id = CAM_MAP[cam_idx]
-    dev_path = get_camera_node(target_hw_id) or f"/dev/video{cam_idx * 2}"
-
-    cap = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_W)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_H)
-    cap.set(cv2.CAP_PROP_FPS, 15)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap = cv2.VideoCapture(VIDEO_TEST_PATH)
+    print(f"--> Cam {cam_idx} video source: {VIDEO_TEST_PATH}")
 
     frame_t1 = None
     tracker = TrajectoryFilter(
@@ -1445,17 +1350,16 @@ def capture_job(cam_idx):
     current_draw_boxes =[] 
     bg_samples = []
     bg_gray, bg_tol = None, None
-    dynamic_bg_samples = []
-    dynamic_bg_ready = not ENABLE_DYNAMIC_BG_MODEL
-    dynamic_bg_start_ts = None
-    dynamic_bg_next_sample_ts = 0.0
-    dynamic_bg_ready_deadline_ts = None
-    latest_fusion_mask = None
     last_tracker_update_frame = 0
 
     while not stop_event.is_set():
         ret, frame = cap.read()
-        if not ret: time.sleep(0.1); continue
+        if not ret:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.1)
+                continue
         gray_frame = None
         if len(frame.shape) == 2:
             gray_frame = frame
@@ -1482,44 +1386,6 @@ def capture_job(cam_idx):
             else:
                 gray_small = cv2.resize(gray, (DIFF_W, DIFF_H), interpolation=cv2.INTER_AREA)
             scale_x, scale_y = W / float(DIFF_W), H / float(DIFF_H)
-
-            if ENABLE_DYNAMIC_BG_MODEL and not dynamic_bg_ready:
-                now_ts = time.time()
-                if dynamic_bg_start_ts is None:
-                    per_cam_learning_span = DYNAMIC_BG_SECONDS + DYNAMIC_BG_SERIAL_GAP_SECONDS
-                    start_delay = cam_idx * per_cam_learning_span + DYNAMIC_BG_START_DELAY_SECONDS
-                    dynamic_bg_start_ts = SYSTEM_START_TIME + start_delay
-                    dynamic_bg_next_sample_ts = dynamic_bg_start_ts
-                    dynamic_bg_ready_deadline_ts = dynamic_bg_start_ts + DYNAMIC_BG_SECONDS
-                    print(
-                        f"--> Cam {cam_idx} dynamic background scheduled. "
-                        f"start_delay={start_delay:.1f}s "
-                        f"window={DYNAMIC_BG_SECONDS:.1f}s",
-                        flush=True,
-                    )
-                if now_ts >= dynamic_bg_start_ts:
-                    if now_ts >= dynamic_bg_next_sample_ts:
-                        dynamic_bg_samples.append(gray_small.copy())
-                        dynamic_bg_next_sample_ts = now_ts + DYNAMIC_BG_SAMPLE_INTERVAL
-                    if (
-                        dynamic_bg_ready_deadline_ts is not None
-                        and now_ts >= dynamic_bg_ready_deadline_ts
-                    ):
-                        dynamic_bg_gray, dynamic_bg_tol = build_dynamic_bg_model(dynamic_bg_samples)
-                        if dynamic_bg_gray is not None and dynamic_bg_tol is not None:
-                            bg_gray = dynamic_bg_gray
-                            if bg_tol is None:
-                                bg_tol = dynamic_bg_tol
-                            else:
-                                bg_tol = np.maximum(bg_tol, dynamic_bg_tol)
-                        dynamic_bg_ready = True
-                        print(
-                            f"--> Cam {cam_idx} dynamic background ready. "
-                            f"start_delay={start_delay:.1f}s "
-                            f"window={DYNAMIC_BG_SECONDS:.1f}s samples={len(dynamic_bg_samples)}",
-                            flush=True,
-                        )
-                        dynamic_bg_samples = []
 
             if ENABLE_LOW_LAYER_STATIC_BG_MASK and bg_gray is None:
                 bg_samples.append(gray_small.copy())
@@ -1562,7 +1428,6 @@ def capture_job(cam_idx):
                     rois = merge_nearby_boxes(diff_rois + rois, dist_thresh=160)
                     rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                     rois = prioritize_diverse_rois(rois, W, H)
-            latest_fusion_mask = fusion_mask
 
             if ENABLE_FRAME_DIFF_ROIS and FUSION_REQUIRE_TRACK_MOTION and track_rois:
                 track_rois = [r for r in track_rois if track_roi_has_motion(r, fusion_mask, W, H)]
@@ -1600,23 +1465,9 @@ def capture_job(cam_idx):
             for roi in rois[:MAX_ROIS_PER_FRAME]:
                 x1, y1, x2, y2 = roi[:4]
                 roi_risk = get_roi_risk(roi)
-                use_padded_roi = ENABLE_TIGHT_MOTION_ROI and roi_is_padded_canvas(roi)
-                if use_padded_roi:
-                    roi_img = make_padded_roi_canvas(
-                        frame,
-                        fusion_mask,
-                        roi,
-                        W,
-                        H,
-                        fusion=ENABLE_FUSION_INFERENCE,
-                        fill_value=TIGHT_MOTION_ROI_FILL,
-                    )
-                    origin_x = int(x1) - int(roi[5])
-                    origin_y = int(y1) - int(roi[6])
-                else:
-                    roi_img = make_fused_roi(frame, fusion_mask, (x1, y1, x2, y2), W, H) if ENABLE_FUSION_INFERENCE else frame[y1:y2, x1:x2].copy()
-                    origin_x = int(x1)
-                    origin_y = int(y1)
+                roi_img = frame[y1:y2, x1:x2].copy()
+                origin_x = int(x1)
+                origin_y = int(y1)
                 if roi_img.size == 0:
                     continue
                 if put_latest(inf_queues[cam_idx], (roi_img, origin_x, origin_y, f_idx, roi_risk)):
@@ -1734,10 +1585,7 @@ def capture_job(cam_idx):
 
         if draw_this_frame:
             try:
-                if ENABLE_FUSION_DISPLAY:
-                    show_frame = make_fused_display_preview(frame, latest_fusion_mask, 640, 360)
-                else:
-                    show_frame = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_AREA)
+                show_frame = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_AREA)
                 dsx, dsy = 640.0/W, 360.0/H
                 for i in range(len(current_draw_boxes)-1, -1, -1):
                     x1, y1, x2, y2, color, text, life = current_draw_boxes[i]
