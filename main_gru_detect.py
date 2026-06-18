@@ -9,6 +9,26 @@ import subprocess
 import math
 from collections import deque
 from comms import DataSender, VideoSender
+import os
+try:
+    import onnxruntime as ort
+    HAS_ORT = True
+except ImportError:
+    HAS_ORT = False
+
+# ==========================================
+# 0. 辅助算法：用 NumPy 替代 SciPy 以去除依赖
+# ==========================================
+def savgol_filter_numpy(y, window_size=5, polyorder=2):
+    """
+    零依赖的 NumPy 版本 Savitzky-Golay 滤波器 (仅针对 window_size=5, polyorder=2)
+    """
+    if len(y) < window_size:
+        return y
+    coeffs = np.array([-3.0, 12.0, 17.0, 12.0, -3.0]) / 35.0
+    padded = np.pad(y, (2, 2), mode='edge')
+    smoothed = np.convolve(padded, coeffs, mode='valid')
+    return smoothed
 
 # ==========================================
 # 0. 辅助算法：用 NumPy 替代 SciPy 以去除依赖
@@ -196,7 +216,7 @@ class FeatureTracker:
         sky_height_limit = int(height * (1100.0 / 1440.0))
         
         centroids = self.detect_all_centroids(frame, thresh_val=120)
-        if not centroids and not self.tracks:
+        if not centroids:
             centroids = self.detect_all_centroids(frame, thresh_val=130)
             
         track_predictions = {}
@@ -410,6 +430,51 @@ class FeatureTracker:
             drone_pos = None
             is_valid = False
             
+    def get_track_features(self, track):
+        x = np.array([pt['x'] for pt in track.history_buffer], dtype=np.float64)
+        y = np.array([pt['y'] for pt in track.history_buffer], dtype=np.float64)
+        w = np.array([pt['w'] for pt in track.history_buffer], dtype=np.float64)
+        h = np.array([pt['h'] for pt in track.history_buffer], dtype=np.float64)
+        conf = np.array([pt['conf'] for pt in track.history_buffer], dtype=np.float64)
+        
+        if getattr(self, "smooth", True) and len(x) >= 5:
+            x = savgol_filter_numpy(x, 5, 2)
+            y = savgol_filter_numpy(y, 5, 2)
+            
+        if getattr(self, "normalize", True):
+            w_ref = getattr(self, "width", 1280.0)
+            h_ref = getattr(self, "height", 720.0)
+            x_norm = x / (2.0 * w_ref)
+            y_norm = y / (2.0 * h_ref)
+            w_norm = w / (2.0 * w_ref)
+            h_norm = h / (2.0 * h_ref)
+        else:
+            x_norm = x
+            y_norm = y
+            w_norm = w
+            h_norm = h
+            
+        relative_x = x_norm - x_norm[0]
+        relative_y = y_norm - y_norm[0]
+        
+        velocity_x = np.diff(x_norm, prepend=x_norm[0])
+        velocity_y = np.diff(y_norm, prepend=y_norm[0])
+        
+        acceleration_x = np.diff(velocity_x, prepend=velocity_x[0])
+        acceleration_y = np.diff(velocity_y, prepend=velocity_y[0])
+        
+        feature_list = [
+            x_norm, y_norm, relative_x, relative_y,
+            velocity_x, velocity_y, acceleration_x, acceleration_y
+        ]
+        
+        if getattr(self, "input_dim", 8) == 12:
+            aspect_ratio = w_norm / (h_norm + 1e-8)
+            feature_list.extend([w_norm, h_norm, aspect_ratio, conf])
+            
+        features = np.stack(feature_list, axis=-1)
+        return features.astype(np.float32)
+
         return drone_pos, self.last_valid_offset, is_valid
 
 
@@ -490,6 +555,21 @@ def capture_job(cam_idx):
 
     tracker = FeatureTracker(seq_len=20, input_dim=8, smooth=True, normalize=True)
 
+    # 初始化 ONNX Runtime 推理会话 (结合当前文件夹目录下的 gru.onnx)
+    gru_model = None
+    if HAS_ORT:
+        model_paths = ["gru.onnx", "model/gru.onnx"]
+        for p in model_paths:
+            if os.path.exists(p):
+                try:
+                    gru_model = ort.InferenceSession(p, providers=['CPUExecutionProvider'])
+                    print(f"--> Cam {cam_idx} GRU ONNX Model Loaded from {p}.", flush=True)
+                    break
+                except Exception as e:
+                    print(f"--> Cam {cam_idx} failed to load GRU ONNX model {p}: {e}", flush=True)
+    else:
+        print(f"--> Cam {cam_idx} ONNX Runtime not installed. Bypassing GRU ONNX model.", flush=True)
+
     f_idx = 0
     local_data_sender = DataSender(DATA_TARGETS, BOARD_ID)
     v_sender = VideoSender(VIDEO_TARGET_IP, VIDEO_BASE_PORT)
@@ -524,27 +604,56 @@ def capture_job(cam_idx):
             input_frame = gray_frame if gray_frame is not None else frame
             drone_pos, _, is_valid = tracker.update(input_frame)
             
-            # B. 对所有的活跃轨迹基于持续帧数进行 UAV 认定 (3588 CPU 极简直接判定，不使用 GRU 模型)
+            # B. 对所有的活跃轨迹进行特征判定 (优先使用 ONNX Runtime GRU 推理，如无模型则回退为纯 OpenCV 帧数判定)
             for tid, track in tracker.tracks.items():
-                if len(track.history_buffer) >= 5:
-                    track.classification_prob = 1.0
-                    track.is_uav = True
-                else:
-                    track.classification_prob = None
-                    track.is_uav = False
-                track.pred_coords = []
+                if gru_model is not None and len(track.history_buffer) == tracker.seq_len:
+                    try:
+                        features_np = tracker.get_track_features(track)
+                        features_input = np.expand_dims(features_np, axis=0).astype(np.float32)
                         
-            # C. 选取唯一黄金主轨迹进行高亮展示和云台发数
+                        input_name = gru_model.get_inputs()[0].name
+                        outputs = gru_model.run(None, {input_name: features_input})
+                        logits_val = float(outputs[0][0][0])
+                        prob = 1.0 / (1.0 + math.exp(-logits_val))
+                        pred_offsets = outputs[1][0]
+                        
+                        track.classification_prob = prob
+                        track.is_uav = prob >= 0.60
+                        
+                        current_x, current_y = track.smooth_px, track.smooth_py
+                        scale_x = W / 2.0
+                        scale_y = H / 2.0
+                        track_pred = []
+                        for off in pred_offsets:
+                            track_pred.append((int(current_x + off[0] * scale_x), int(current_y + off[1] * scale_y)))
+                        track.pred_coords = track_pred
+                    except Exception as e:
+                        if len(track.history_buffer) >= 5:
+                            track.classification_prob = 1.0
+                            track.is_uav = True
+                        else:
+                            track.classification_prob = None
+                            track.is_uav = False
+                        track.pred_coords = []
+                else:
+                    if len(track.history_buffer) >= 5:
+                        track.classification_prob = 1.0
+                        track.is_uav = True
+                    else:
+                        track.classification_prob = None
+                        track.is_uav = False
+                    track.pred_coords = []
+                        
+            # C. 选取生命周期最长（最先建立）的活跃轨迹作为高亮主轨迹，消除出框延迟
             primary_track = None
-            uav_tracks = [t for t in tracker.tracks.values() if t.is_uav]
-            if uav_tracks:
-                primary_track = max(uav_tracks, key=lambda t: t.classification_prob)
+            if tracker.tracks:
+                primary_track = min(tracker.tracks.values(), key=lambda t: t.track_id)
                 
             # D. 清空并生成当前帧可视化覆盖数据
             current_draw_boxes = []
             
-            # 渲染黄金轨迹
-            if primary_track is not None and primary_track.is_uav:
+            # 渲染黄金轨迹 (只要 primary_track 不为空就立即渲染以达到无延迟锁框)
+            if primary_track is not None:
                 # 绘制历史轨迹 (橙色)
                 if len(primary_track.history_buffer) > 1:
                     for i in range(1, len(primary_track.history_buffer)):
@@ -554,8 +663,8 @@ def capture_job(cam_idx):
                         pt1 = (int(p1["px"]), int(p1["py"]))
                         current_draw_boxes.append([pt0[0], pt0[1], pt1[0], pt1[1], (0, 69, 255), "LINE", 1])
                 
-                # 绘制未来 5 步预测轨迹 (黄色)
-                if primary_track.pred_coords:
+                # 绘制未来 5 步预测轨迹 (黄色，仅在启用 ONNX 模型且有预测偏移时渲染)
+                if getattr(primary_track, "pred_coords", None):
                     pred_pts = primary_track.pred_coords
                     for i in range(1, len(pred_pts)):
                         current_draw_boxes.append([pred_pts[i - 1][0], pred_pts[i - 1][1], pred_pts[i][0], pred_pts[i][1], (0, 255, 255), "LINE", 1])
@@ -576,8 +685,8 @@ def capture_job(cam_idx):
                 label = f"UAV #{primary_track.track_id} (conf: {prob:.2f})"
                 current_draw_boxes.append([x1, y1, x2, y2, (0, 255, 255), label, 1])
                 
-                # E. 向云台发送 UDP 电传数据
-                if not learning_mode:
+                # E. 向云台发送 UDP 电传数据 (要求轨迹至少稳定存活 3 帧，防止临时单帧亮噪点引起云台误抖)
+                if not learning_mode and len(primary_track.history_buffer) >= 3:
                     gimbal_data = [[x1, y1, x2, y2, estimate_rough_range_m([x1, y1, x2, y2], W)]]
                     local_data_sender.send_packet("data", cam_idx, gimbal_data, target="gimbal")
             else:
