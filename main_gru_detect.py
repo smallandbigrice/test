@@ -185,7 +185,12 @@ class FeatureTracker:
         height, width = frame.shape[:2]
         self.height, self.width = height, width
         
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if len(frame.shape) == 3 and frame.shape[2] == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        elif len(frame.shape) == 3 and frame.shape[2] == 1:
+            gray = frame[:, :, 0]
+        else:
+            gray = frame
         _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY_INV)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
@@ -638,8 +643,9 @@ def capture_job(cam_idx):
 
         # 核心检测追踪逻辑 (每 PROCESS_EVERY_N_FRAMES 帧执行一次)
         if (f_idx + cam_idx) % PROCESS_EVERY_N_FRAMES == 0:
-            # A. 追踪器更新 (内部调用 detect_all_centroids 自适应灰度二值化检测)
-            drone_pos, _, is_valid = tracker.update(frame)
+            # A. 追踪器更新 (如果是灰度图，直接传入原始灰度图，避免多余转换)
+            input_frame = gray_frame if gray_frame is not None else frame
+            drone_pos, _, is_valid = tracker.update(input_frame)
             
             # B. 对所有的轨迹运行 GRU 时序噪点判定与未来轨迹预测
             if gru_model is not None:
