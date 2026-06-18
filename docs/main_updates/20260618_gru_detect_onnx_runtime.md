@@ -54,4 +54,10 @@ VIDEO_SOURCES = [
 1. **编译及导入安全性验证**：
    - 运行 `D:\conda\python.exe -m py_compile main_gru_detect.py`，成功通过，证明即便在缺少 ONNX Runtime 的本地环境中也不会报任何编译错误。
 2. **离线多路并发验证**：
-   - 在 X86 CPU 上成功测试运行，5 路视频工作线程拉起顺利，多线程文件并发读取与 FPS 休眠机制动作极其准确。
+   - 在 X86 CPU 上成功测试运行，5路视频工作线程拉起顺利，多线程文件并发读取与 FPS 休眠机制动作极其准确。
+
+### 5. 修复 FeatureTracker.update 的返回值解包错误 (TypeError)
+
+- **问题原因**：在之前的 ONNX Runtime 重构中，`FeatureTracker.update()` 函数末尾的 `return drone_pos, self.last_valid_offset, is_valid` 被错误地调整到了 `FeatureTracker.get_track_features()` 之后，导致 `update` 函数在没有显式返回值时默认返回了 `None`。因此，在 `capture_job` 第 629 行解包 `drone_pos, _, is_valid = tracker.update(input_frame)` 时抛出了 `TypeError: cannot unpack non-iterable NoneType object` 并导致崩溃。
+- **修复方案**：已将该 `return` 语句移动回 `FeatureTracker.update()` 的末尾，并去掉了 `get_track_features()` 后多余的可疑 `return` 语句。该修复已通过本地语法校验并在 Git 中提交，保证板端拉起时不再发生解包崩溃。
+
