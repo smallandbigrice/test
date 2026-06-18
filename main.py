@@ -49,6 +49,8 @@ VIDEO_TARGET_IP = "192.168.2.200"
 VIDEO_BASE_PORT = 9999                  
 
 CROP_SIZE = 640      
+TIGHT_ROI_PAD = 32
+TIGHT_ROI_FILL = 114
 DIFF_THRESH = 20                 
 MIN_OBJ_SIZE = 20                
 MAX_ROIS_PER_FRAME = 6           
@@ -93,6 +95,35 @@ def put_latest(q, item):
             return True
         except queue.Full:
             return False
+
+def make_padded_roi_canvas(frame, roi_info, crop_size=CROP_SIZE, fill_value=TIGHT_ROI_FILL):
+    x1, y1, x2, y2, pad_x, pad_y = [int(v) for v in roi_info[:6]]
+    patch = frame[y1:y2, x1:x2]
+    if patch.size == 0:
+        return patch
+
+    canvas = np.full((crop_size, crop_size, 3), np.uint8(fill_value), dtype=np.uint8)
+    dst_x2 = min(crop_size, pad_x + patch.shape[1])
+    dst_y2 = min(crop_size, pad_y + patch.shape[0])
+    canvas[pad_y:dst_y2, pad_x:dst_x2] = patch[:dst_y2-pad_y, :dst_x2-pad_x]
+    return canvas
+
+def map_padded_detection_to_frame(det, roi_info, full_w, full_h):
+    x1, y1, x2, y2, pad_x, pad_y = [int(v) for v in roi_info[:6]]
+    src_w = max(0, x2 - x1)
+    src_h = max(0, y2 - y1)
+    dx1 = max(0, min(src_w, int(round(det[0] - pad_x))))
+    dy1 = max(0, min(src_h, int(round(det[1] - pad_y))))
+    dx2 = max(0, min(src_w, int(round(det[2] - pad_x))))
+    dy2 = max(0, min(src_h, int(round(det[3] - pad_y))))
+    if dx2 <= dx1 or dy2 <= dy1:
+        return None
+    return [
+        max(0, min(full_w, x1 + dx1)),
+        max(0, min(full_h, y1 + dy1)),
+        max(0, min(full_w, x1 + dx2)),
+        max(0, min(full_h, y1 + dy2)),
+    ]
 
 # ==========================================
 # 3. 核心辅助函数 (保持不变)
@@ -188,11 +219,11 @@ def inference_worker():
         did_work = False
         for i in range(N_CAM):
             try:
-                roi, x, y, src_frame_idx = inf_queues[i].get_nowait()
+                roi, roi_info, src_frame_idx = inf_queues[i].get_nowait()
                 did_work = True
                 res = yolo.infer(roi)
                 if res is not None:
-                    put_latest(res_queues[i], (res, x, y, src_frame_idx))
+                    put_latest(res_queues[i], (res, roi_info, src_frame_idx))
             except queue.Empty: pass
         if not did_work: time.sleep(0.001)
     if yolo: yolo.release()
@@ -258,26 +289,47 @@ def video_test_job(cam_idx, video_path):
                     if area < 10: continue
                     x, y, w, h = cv2.boundingRect(c)
                     fx, fy, fw, fh = int(x*scale_x), int(y*scale_y), int(w*scale_x), int(h*scale_y)
-                    cx, cy = fx+fw//2, fy+fh//2
-                    half = CROP_SIZE//2
-                    temp_rois.append((max(0, cx-half), max(0, cy-half), min(W, cx+half), min(H, cy+half)))
+                    sx1 = max(0, fx - TIGHT_ROI_PAD)
+                    sy1 = max(0, fy - TIGHT_ROI_PAD)
+                    sx2 = min(W, fx + fw + TIGHT_ROI_PAD)
+                    sy2 = min(H, fy + fh + TIGHT_ROI_PAD)
+                    sw, sh = sx2 - sx1, sy2 - sy1
+                    if sw <= CROP_SIZE and sh <= CROP_SIZE:
+                        pad_x = (CROP_SIZE - sw) // 2
+                        pad_y = (CROP_SIZE - sh) // 2
+                        temp_rois.append((sx1, sy1, sx2, sy2, pad_x, pad_y))
+                    else:
+                        cx, cy = fx + fw//2, fy + fh//2
+                        half = CROP_SIZE//2
+                        rx1 = max(0, min(W - CROP_SIZE, cx - half))
+                        ry1 = max(0, min(H - CROP_SIZE, cy - half))
+                        rx2 = min(W, rx1 + CROP_SIZE)
+                        ry2 = min(H, ry1 + CROP_SIZE)
+                        pad_x = (CROP_SIZE - (rx2 - rx1)) // 2
+                        pad_y = (CROP_SIZE - (ry2 - ry1)) // 2
+                        temp_rois.append((rx1, ry1, rx2, ry2, pad_x, pad_y))
                 
                 rois = merge_nearby_boxes(temp_rois, dist_thresh=300)
             
             frame_t2, frame_t1 = frame_t1, gray_small
-            for (x1, y1, x2, y2) in rois[:MAX_ROIS_PER_FRAME]:
+            for roi_info in rois[:MAX_ROIS_PER_FRAME]:
+                x1, y1, x2, y2 = roi_info[:4]
                 current_draw_boxes.append([x1, y1, x2, y2, (255, 255, 255), "ROI", 2])
-                put_latest(inf_queues[cam_idx], (frame[y1:y2, x1:x2].copy(), x1, y1, f_idx))
+                roi_img = make_padded_roi_canvas(frame, roi_info)
+                if roi_img.size != 0:
+                    put_latest(inf_queues[cam_idx], (roi_img, roi_info, f_idx))
 
         # 2. 接收推理结果
         raw_boxes_in_this_frame =[]
         while True:
             try:
-                dets, xo, yo, src_frame_idx = res_queues[cam_idx].get_nowait()
+                dets, roi_info, src_frame_idx = res_queues[cam_idx].get_nowait()
                 if f_idx - src_frame_idx > MAX_INFERENCE_RESULT_AGE_FRAMES:
                     continue
                 for d in dets:
-                    raw_boxes_in_this_frame.append([int(d[0]+xo), int(d[1]+yo), int(d[2]+xo), int(d[3]+yo)])
+                    mapped = map_padded_detection_to_frame(d, roi_info, W, H)
+                    if mapped is not None:
+                        raw_boxes_in_this_frame.append(mapped)
             except queue.Empty: break
 
         unique_raw_boxes = merge_nearby_boxes(raw_boxes_in_this_frame, dist_thresh=100)
