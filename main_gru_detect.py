@@ -48,6 +48,15 @@ ALGORITHM_NOTE = "Pure CPU-based thresholding detection + GRU trajectory noise f
 N_CAM = 5                        
 INIT_TIME = 5                    
 
+SIMULATE_BY_VIDEOS = True  # 是否使用本地视频文件模拟 5 路摄像头输入
+VIDEO_SOURCES = [
+    "record_2k_pure/3.mp4",
+    "record_2k_pure/4.mp4",
+    "record_2k_pure/7.mp4",
+    "record_2k_pure/8.mp4",
+    "record_2k_pure/4.mp4"
+]                    
+
 SHOW_INDIVIDUAL_WINDOWS = True
 VIDEO_SEND_EVERY_N_FRAMES = 3
 MAX_DRAW_BOXES = 80
@@ -543,15 +552,20 @@ def get_camera_node(bus_info_keyword):
 # ==========================================
 def capture_job(cam_idx):
     if cam_idx not in CAM_MAP: return
-    target_hw_id = CAM_MAP[cam_idx]
-    dev_path = get_camera_node(target_hw_id) or f"/dev/video{cam_idx * 2}"
-
-    cap = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_W)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_H)
-    cap.set(cv2.CAP_PROP_FPS, 15)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    
+    if SIMULATE_BY_VIDEOS:
+        video_path = VIDEO_SOURCES[cam_idx % len(VIDEO_SOURCES)]
+        cap = cv2.VideoCapture(video_path)
+        print(f"--> Cam {cam_idx} simulating via video: {video_path}", flush=True)
+    else:
+        target_hw_id = CAM_MAP[cam_idx]
+        dev_path = get_camera_node(target_hw_id) or f"/dev/video{cam_idx * 2}"
+        cap = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_W)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_H)
+        cap.set(cv2.CAP_PROP_FPS, 15)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     tracker = FeatureTracker(seq_len=20, input_dim=8, smooth=True, normalize=True)
 
@@ -578,7 +592,17 @@ def capture_job(cam_idx):
 
     while not stop_event.is_set():
         ret, frame = cap.read()
-        if not ret: time.sleep(0.1); continue
+        if not ret:
+            if SIMULATE_BY_VIDEOS:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+            else:
+                time.sleep(0.1)
+                continue
+                
+        if SIMULATE_BY_VIDEOS:
+            # 仿真真实摄像头 15 FPS 帧率延迟，防止离线读取狂飙吃满 CPU
+            time.sleep(0.066)
         
         gray_frame = None
         if len(frame.shape) == 2:
