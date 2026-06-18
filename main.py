@@ -110,9 +110,9 @@ ENABLE_FRAME_DIFF_ROIS = True
 DIFF_THRESH = 8
 MIN_LOCAL_DIFF_MEAN = 10.0
 ENABLE_GRAY_NOISE_SUPPRESSOR = False
-FUSION_REQUIRE_TRACK_MOTION = True
-FUSION_TRACK_MIN_PIXELS = 3
-FUSION_TRACK_CENTER_SIZE = 120
+TRACK_REQUIRE_CURRENT_MOTION = True
+TRACK_MOTION_MIN_PIXELS = 3
+TRACK_MOTION_CENTER_SIZE = 120
 ENABLE_VERTICAL_STRIP_FILTER = True
 VERTICAL_STRIP_ASPECT_RATIO = 1.6
 VERTICAL_STRIP_MIN_HEIGHT = 8
@@ -302,7 +302,7 @@ def cleanup_motion_mask(mask):
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MOTION_CLOSE_KERNEL, iterations=MOTION_CLOSE_ITER)
     return mask
 
-def track_roi_has_motion(track_roi, mask_small, full_w, full_h, min_pixels=FUSION_TRACK_MIN_PIXELS, center_size=FUSION_TRACK_CENTER_SIZE):
+def track_roi_has_motion(track_roi, mask_small, full_w, full_h, min_pixels=TRACK_MOTION_MIN_PIXELS, center_size=TRACK_MOTION_CENTER_SIZE):
     if mask_small is None:
         return True
     x1, y1, x2, y2 = [float(v) for v in track_roi[:4]]
@@ -1398,7 +1398,7 @@ def capture_job(cam_idx):
             
             processed_for_detection = True
             rois =[]
-            fusion_mask = None
+            motion_mask = None
             track_rois = tracker.get_yolo_seeded_search_rois(f_idx, W, H) if ENABLE_TRAJECTORY_TRACKING else []
             track_roi_keys = set()
             diff_img = None
@@ -1410,7 +1410,7 @@ def capture_job(cam_idx):
                 _, mask = cv2.threshold(diff_img, DIFF_THRESH, 255, cv2.THRESH_BINARY)
                 mask = apply_static_bg_mask(mask, gray_small, bg_gray, bg_tol)
                 mask = cleanup_motion_mask(mask)
-                fusion_mask = cv2.bitwise_or(fusion_mask, mask) if fusion_mask is not None else mask
+                motion_mask = cv2.bitwise_or(motion_mask, mask) if motion_mask is not None else mask
                 edge_mask = build_edge_mask(gray_small)
                 diff_rois = motion_rois_from_mask(
                     mask,
@@ -1429,16 +1429,16 @@ def capture_job(cam_idx):
                     rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                     rois = prioritize_diverse_rois(rois, W, H)
 
-            if ENABLE_FRAME_DIFF_ROIS and FUSION_REQUIRE_TRACK_MOTION and track_rois:
-                track_rois = [r for r in track_rois if track_roi_has_motion(r, fusion_mask, W, H)]
+            if ENABLE_FRAME_DIFF_ROIS and TRACK_REQUIRE_CURRENT_MOTION and track_rois:
+                track_rois = [r for r in track_rois if track_roi_has_motion(r, motion_mask, W, H)]
             if ENABLE_FRAME_DIFF_ROIS and flicker_suppressor is not None and track_rois:
                 track_rois = [
                     r for r in track_rois
                     if not flicker_suppressor.is_blocked_full_box(f_idx, r, scale_x, scale_y)
                 ]
             if ENABLE_FRAME_DIFF_ROIS and track_rois:
-                if ENABLE_TIGHT_MOTION_ROI and fusion_mask is not None:
-                    track_mask = limit_mask_to_rois(fusion_mask, track_rois, W, H)
+                if ENABLE_TIGHT_MOTION_ROI and motion_mask is not None:
+                    track_mask = limit_mask_to_rois(motion_mask, track_rois, W, H)
                     track_motion_rois = motion_rois_from_mask(
                         track_mask,
                         diff_img,
