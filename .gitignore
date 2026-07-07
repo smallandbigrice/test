@@ -27,6 +27,7 @@ artifacts/
 *.pt
 *.onnx
 *.rknn
+!model/yolov5s_night_latest.rknn
 
 # Local OS/editor files
 .DS_Store

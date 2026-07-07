@@ -5,7 +5,7 @@ os.environ.setdefault("NO_AT_BRIDGE", "1")
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -20,9 +20,8 @@ import numpy as np
 import subprocess
 import math
 import csv
-import re
 from collections import deque
-from yololib import YoloRKNN
+from videoyololib import YoloRKNN
 from comms import DataSender, VideoSender
 
 try:
@@ -34,12 +33,12 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-rknn-static-confirm-lowmotion-20260707"
-ALGORITHM_NOTE = "Frame-diff RKNN detector with high-layer gray seed ROIs, visual lock, hover recheck, and low-motion static confirmation."
+ALGORITHM_VERSION = "frame-diff-rknn-scene-layer-simple-20260705"
+ALGORITHM_NOTE = "Use UAV_SCENE_MODE=day/night and one high/low layer profile per camera; no in-frame split."
 N_CAM = max(1, int(os.environ.get("UAV_VIDEO_CAM_COUNT", "5")))
 INIT_TIME = 5
 VIDEO_TEST_PATH = os.environ.get("UAV_VIDEO_PATH", "./4.mp4")
-SIMULATE_BY_VIDEOS = os.environ.get("UAV_VIDEO_TEST", "0").strip().lower() not in ("0", "false", "no")
+SIMULATE_BY_VIDEOS = os.environ.get("UAV_VIDEO_TEST", "1").strip().lower() not in ("0", "false", "no")
 ENABLE_CAMERA_PREBUILD_BG = os.environ.get("UAV_CAMERA_PREBUILD_BG", "0").strip().lower() not in (
     "0",
     "false",
@@ -53,8 +52,6 @@ VIDEO_TEST_DETECTION_CSV = os.environ.get("UAV_VIDEO_DETECTION_CSV", "").strip()
 VIDEO_TEST_SAVE_ROIS_DIR = os.environ.get("UAV_VIDEO_SAVE_ROIS_DIR", "").strip()
 VIDEO_TEST_SAVE_ROIS_START = max(0.0, float(os.environ.get("UAV_VIDEO_SAVE_ROIS_START", "0")))
 VIDEO_TEST_SAVE_ROIS_END = max(VIDEO_TEST_SAVE_ROIS_START, float(os.environ.get("UAV_VIDEO_SAVE_ROIS_END", "0")))
-VIDEO_TEST_RESIZE_W = max(0, int(os.environ.get("UAV_VIDEO_RESIZE_W", "0")))
-VIDEO_TEST_RESIZE_H = max(0, int(os.environ.get("UAV_VIDEO_RESIZE_H", "0")))
 DEBUG_ASYNC_TRACE = os.environ.get("UAV_DEBUG_ASYNC_TRACE", "0").strip().lower() not in ("0", "false", "no")
 DRAW_INTERMEDIATE_BOXES = os.environ.get("UAV_DRAW_INTERMEDIATE_BOXES", "0").strip().lower() not in ("0", "false", "no")
 
@@ -64,83 +61,6 @@ def _env_bool(name, default=False):
     if raw is None:
         return bool(default)
     return raw.strip().lower() not in ("0", "false", "no", "off")
-
-
-ENABLE_GRU_GRAY_SEED_ROIS = _env_bool("UAV_GRU_GRAY_SEED_ROIS", True)
-GRU_GRAY_SEED_THRESH = max(1, int(os.environ.get("UAV_GRU_GRAY_SEED_THRESH", "120")))
-GRU_GRAY_SEED_RELAXED_THRESH = max(GRU_GRAY_SEED_THRESH, int(os.environ.get("UAV_GRU_GRAY_SEED_RELAXED_THRESH", "130")))
-GRU_GRAY_SEED_MIN_AREA = max(1, int(os.environ.get("UAV_GRU_GRAY_SEED_MIN_AREA", "1")))
-GRU_GRAY_SEED_MAX_AREA = max(GRU_GRAY_SEED_MIN_AREA, int(os.environ.get("UAV_GRU_GRAY_SEED_MAX_AREA", "1200")))
-GRU_GRAY_SEED_BORDER = max(0, int(os.environ.get("UAV_GRU_GRAY_SEED_BORDER", "32")))
-GRU_GRAY_SEED_RADIUS = max(8.0, float(os.environ.get("UAV_GRU_GRAY_SEED_RADIUS", "130")))
-GRU_GRAY_SEED_MAX_NEIGHBORS = max(0, int(os.environ.get("UAV_GRU_GRAY_SEED_MAX_NEIGHBORS", "3")))
-GRU_GRAY_SEED_SKY_Y_RATIO = min(1.0, max(0.0, float(os.environ.get("UAV_GRU_GRAY_SEED_SKY_Y_RATIO", "0.88"))))
-GRU_GRAY_SEED_MAX_ROIS = max(0, int(os.environ.get("UAV_GRU_GRAY_SEED_MAX_ROIS", "4")))
-GRU_GRAY_SEED_SCORE_BONUS = float(os.environ.get("UAV_GRU_GRAY_SEED_SCORE_BONUS", "35.0"))
-
-ENABLE_VISUAL_LOCK = _env_bool("UAV_VISUAL_LOCK", True)
-VISUAL_LOCK_EVERY_N_FRAMES = max(1, int(os.environ.get("UAV_VISUAL_LOCK_EVERY_N_FRAMES", "3")))
-VISUAL_LOCK_ENTER_YOLO_HITS = max(1, int(os.environ.get("UAV_VISUAL_LOCK_ENTER_YOLO_HITS", "5")))
-VISUAL_LOCK_ENTER_RECENT_HITS = max(1, int(os.environ.get("UAV_VISUAL_LOCK_ENTER_RECENT_HITS", "5")))
-VISUAL_LOCK_ENTER_GREEN_STREAK = max(1, int(os.environ.get("UAV_VISUAL_LOCK_ENTER_GREEN_STREAK", "4")))
-VISUAL_LOCK_ENTER_TRACK_SCORE = min(1.0, max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_ENTER_TRACK_SCORE", "0.58"))))
-VISUAL_LOCK_ENTER_TRAJ_SCORE = min(1.0, max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_ENTER_TRAJ_SCORE", "0.65"))))
-VISUAL_LOCK_ENTER_MEAN_CONF = min(1.0, max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_ENTER_MEAN_CONF", "0.40"))))
-VISUAL_LOCK_ENTER_MIN_NET_MOTION = max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_ENTER_MIN_NET_MOTION", "0.0")))
-VISUAL_LOCK_ENTER_MAX_CENTER_JITTER = max(1.0, float(os.environ.get("UAV_VISUAL_LOCK_ENTER_MAX_CENTER_JITTER", "70.0")))
-VISUAL_LOCK_ENTER_MAX_BOX_JITTER_RATIO = max(0.05, float(os.environ.get("UAV_VISUAL_LOCK_ENTER_MAX_BOX_JITTER_RATIO", "0.85")))
-VISUAL_LOCK_WINDOW = max(64, int(os.environ.get("UAV_VISUAL_LOCK_WINDOW", "260")))
-VISUAL_LOCK_RECHECK_INTERVAL = max(1, int(os.environ.get("UAV_VISUAL_LOCK_RECHECK_INTERVAL", "30")))
-VISUAL_LOCK_RECHECK_GRACE_FRAMES = max(0, int(os.environ.get("UAV_VISUAL_LOCK_RECHECK_GRACE_FRAMES", "9")))
-VISUAL_LOCK_RECHECK_DECAY = min(1.0, max(0.01, float(os.environ.get("UAV_VISUAL_LOCK_RECHECK_DECAY", "0.45"))))
-VISUAL_LOCK_MAX_NO_YOLO_FRAMES = max(1, int(os.environ.get("UAV_VISUAL_LOCK_MAX_NO_YOLO_FRAMES", "45")))
-VISUAL_LOCK_MAX_MISSES = max(1, int(os.environ.get("UAV_VISUAL_LOCK_MAX_MISSES", "8")))
-VISUAL_LOCK_MIN_RESPONSE = max(1.0, float(os.environ.get("UAV_VISUAL_LOCK_MIN_RESPONSE", "5.0")))
-VISUAL_LOCK_MIN_SCORE = max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_MIN_SCORE", "12.0")))
-VISUAL_LOCK_MIN_TEMPLATE = min(1.0, max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_MIN_TEMPLATE", "0.42"))))
-VISUAL_LOCK_MAX_DIST_RATIO = min(1.0, max(0.05, float(os.environ.get("UAV_VISUAL_LOCK_MAX_DIST_RATIO", "0.36"))))
-VISUAL_LOCK_MAX_AREA = max(1, int(os.environ.get("UAV_VISUAL_LOCK_MAX_AREA", "220")))
-VISUAL_LOCK_MIN_BOX = max(6, int(os.environ.get("UAV_VISUAL_LOCK_MIN_BOX", "32")))
-VISUAL_LOCK_MAX_BOX = max(VISUAL_LOCK_MIN_BOX, int(os.environ.get("UAV_VISUAL_LOCK_MAX_BOX", "90")))
-VISUAL_LOCK_TEMPLATE_WEIGHT = min(1.0, max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_TEMPLATE_WEIGHT", "0.18"))))
-VISUAL_LOCK_SMOOTH_ALPHA = min(1.0, max(0.05, float(os.environ.get("UAV_VISUAL_LOCK_SMOOTH_ALPHA", "0.28"))))
-VISUAL_LOCK_CONF_ENTER = min(1.0, max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_CONF_ENTER", "0.55"))))
-VISUAL_LOCK_CONF_EXIT = min(1.0, max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_CONF_EXIT", "0.28"))))
-VISUAL_LOCK_CONF_GAIN = min(1.0, max(0.01, float(os.environ.get("UAV_VISUAL_LOCK_CONF_GAIN", "0.32"))))
-VISUAL_LOCK_CONF_DECAY = min(1.0, max(0.01, float(os.environ.get("UAV_VISUAL_LOCK_CONF_DECAY", "0.22"))))
-VISUAL_LOCK_TEMPLATE_UPDATE_MIN_CONF = min(1.0, max(0.0, float(os.environ.get("UAV_VISUAL_LOCK_TEMPLATE_UPDATE_MIN_CONF", "0.55"))))
-
-ENABLE_HOVER_HOLD = _env_bool("UAV_HOVER_HOLD", True)
-HOVER_ENTER_YOLO_HITS = max(1, int(os.environ.get("UAV_HOVER_ENTER_YOLO_HITS", "3")))
-HOVER_ENTER_RECENT_HITS = max(1, int(os.environ.get("UAV_HOVER_ENTER_RECENT_HITS", "2")))
-HOVER_RECHECK_INTERVAL_FRAMES = max(1, int(os.environ.get("UAV_HOVER_RECHECK_INTERVAL_FRAMES", "20")))
-HOVER_MAX_RECHECK_MISSES = max(1, int(os.environ.get("UAV_HOVER_MAX_RECHECK_MISSES", "6")))
-HOVER_ROI_SIZE = max(160, int(os.environ.get("UAV_HOVER_ROI_SIZE", "640")))
-HOVER_MAX_SPEED_PX_PER_FRAME = max(0.1, float(os.environ.get("UAV_HOVER_MAX_SPEED_PX_PER_FRAME", "2.5")))
-HOVER_RECENT_WINDOW = max(3, int(os.environ.get("UAV_HOVER_RECENT_WINDOW", "8")))
-HOVER_MAX_RECENT_NET_MOTION_PX = max(1.0, float(os.environ.get("UAV_HOVER_MAX_RECENT_NET_MOTION_PX", "28.0")))
-HOVER_MIN_TRACK_SCORE = min(1.0, max(0.0, float(os.environ.get("UAV_HOVER_MIN_TRACK_SCORE", "0.45"))))
-HOVER_MAX_YOLO_GAP_FRAMES = max(
-    HOVER_RECHECK_INTERVAL_FRAMES,
-    int(os.environ.get(
-        "UAV_HOVER_MAX_YOLO_GAP_FRAMES",
-        str(HOVER_RECHECK_INTERVAL_FRAMES * HOVER_MAX_RECHECK_MISSES),
-    )),
-)
-
-ENABLE_STATIC_CONFIRM = _env_bool("UAV_STATIC_CONFIRM", True)
-STATIC_CONFIRM_YOLO_HITS = max(1, int(os.environ.get("UAV_STATIC_CONFIRM_YOLO_HITS", "4")))
-STATIC_CONFIRM_RECENT_HITS = max(1, int(os.environ.get("UAV_STATIC_CONFIRM_RECENT_HITS", "4")))
-STATIC_CONFIRM_MAX_MISSES = max(0, int(os.environ.get("UAV_STATIC_CONFIRM_MAX_MISSES", "1")))
-STATIC_CONFIRM_MIN_SCORE = min(1.0, max(0.0, float(os.environ.get("UAV_STATIC_CONFIRM_MIN_SCORE", "0.40"))))
-STATIC_CONFIRM_MIN_MEAN_CONF = min(1.0, max(0.0, float(os.environ.get("UAV_STATIC_CONFIRM_MIN_MEAN_CONF", "0.38"))))
-STATIC_CONFIRM_MAX_CENTER_JITTER = max(1.0, float(os.environ.get("UAV_STATIC_CONFIRM_MAX_CENTER_JITTER", "24.0")))
-STATIC_CONFIRM_MAX_BOX_JITTER_RATIO = max(0.05, float(os.environ.get("UAV_STATIC_CONFIRM_MAX_BOX_JITTER_RATIO", "0.65")))
-STATIC_CONFIRM_RECENT_WINDOW = max(3, int(os.environ.get("UAV_STATIC_CONFIRM_RECENT_WINDOW", str(HOVER_RECENT_WINDOW))))
-STATIC_CONFIRM_MAX_SPEED_PX_PER_FRAME = max(0.1, float(os.environ.get("UAV_STATIC_CONFIRM_MAX_SPEED_PX_PER_FRAME", "2.2")))
-STATIC_CONFIRM_MAX_RECENT_NET_MOTION_PX = max(1.0, float(os.environ.get("UAV_STATIC_CONFIRM_MAX_RECENT_NET_MOTION_PX", "24.0")))
-STATIC_CONFIRM_MAX_BG_RISK = min(1.0, max(0.0, float(os.environ.get("UAV_STATIC_CONFIRM_MAX_BG_RISK", "0.70"))))
-STATIC_CONFIRM_MIN_SEED_ALIGNMENT = min(1.0, max(0.0, float(os.environ.get("UAV_STATIC_CONFIRM_MIN_SEED_ALIGNMENT", "0.25"))))
 
 
 def _env_choice(name, default, choices, aliases=None):
@@ -182,44 +102,6 @@ def parse_env_list(name):
     return [v.strip() for v in raw.replace(";", ",").split(",") if v.strip()]
 
 
-def get_local_ipv4s():
-    ips = []
-    commands = (
-        ["sh", "-c", "ip -o -4 addr show scope global | awk '{print $4}'"],
-        ["sh", "-c", "hostname -I"],
-    )
-    for cmd in commands:
-        try:
-            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=1.0).decode("utf-8", "ignore")
-        except Exception:
-            continue
-        for token in re.split(r"\s+", out.strip()):
-            if not token:
-                continue
-            ip = token.split("/")[0]
-            if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip) and ip not in ips:
-                ips.append(ip)
-    return ips
-
-
-def detect_board_id():
-    forced = os.environ.get("UAV_BOARD_ID", os.environ.get("BOARD_ID", "")).strip()
-    if forced:
-        return forced
-    ips = get_local_ipv4s()
-    for prefix in ("192.168.0.", "192.168.1."):
-        for ip in ips:
-            if ip.startswith(prefix):
-                suffix = ip.rsplit(".", 1)[-1]
-                if suffix.isdigit():
-                    return f"BOARD_{int(suffix)}"
-    for ip in ips:
-        suffix = ip.rsplit(".", 1)[-1]
-        if suffix.isdigit():
-            return f"BOARD_{int(suffix)}"
-    return "BOARD_0"
-
-
 VIDEO_TEST_PATHS = parse_env_list("UAV_VIDEO_PATHS")
 
 
@@ -230,7 +112,7 @@ def get_video_test_source(cam_idx):
 
 
 TRACKER_MIN_HITS = 4
-TRACKER_MAX_DIST = 100           
+TRACKER_MAX_DIST = 100
 TRACKER_MAX_GATE = 320
 TRACKER_RECENT_WINDOW = 18
 TRACKER_MIN_RECENT_HITS = 3
@@ -248,26 +130,22 @@ YOLO_TRACK_MAX_SEARCH_MISSES = 8
 TRACK_SEARCH_PREDICT_MAX_MISSES = 2
 MISS_VELOCITY_DECAY = 0.55
 MAX_TRACK_ROIS_PER_FRAME = 3
-SHOW_INDIVIDUAL_WINDOWS = _env_bool("UAV_SHOW_WINDOWS", False)
-VIDEO_SEND_EVERY_N_FRAMES = max(1, int(os.environ.get("UAV_VIDEO_SEND_EVERY_N_FRAMES", "5")))
-VIDEO_STREAM_W = max(1, int(os.environ.get("UAV_VIDEO_STREAM_W", "640")))
-VIDEO_STREAM_H = max(1, int(os.environ.get("UAV_VIDEO_STREAM_H", "360")))
-VIDEO_STREAM_QUALITY = max(5, min(95, int(os.environ.get("UAV_VIDEO_JPEG_QUALITY", "50"))))
-VIDEO_STREAM_CAM_SPECS = parse_env_list("UAV_VIDEO_STREAM_CAMS")
+SHOW_INDIVIDUAL_WINDOWS = os.environ.get("UAV_SHOW_WINDOWS", "1").strip().lower() not in ("0", "false", "no")
+VIDEO_SEND_EVERY_N_FRAMES = 3
 MAX_DRAW_BOXES = 80
 CAPTURE_W = max(320, int(os.environ.get("UAV_CAPTURE_W", str(DEFAULT_CAPTURE_W))))
 CAPTURE_H = max(240, int(os.environ.get("UAV_CAPTURE_H", str(DEFAULT_CAPTURE_H))))
 
-BOARD_ID = detect_board_id()
-BOARD_ROW_IDX = int(os.environ.get("UAV_BOARD_ROW_IDX", "1"))
+BOARD_ID = "BOARD_2"
+BOARD_ROW_IDX = 1
 
 DATA_TARGETS = {
     "gimbal": ("192.168.0.100", 8888)
 }
-VIDEO_TARGET_IP = os.environ.get("UAV_VIDEO_TARGET_IP", "192.168.0.200")
-VIDEO_BASE_PORT = int(os.environ.get("UAV_VIDEO_BASE_PORT", "9999"))
+VIDEO_TARGET_IP = "192.168.0.200"
+VIDEO_BASE_PORT = 9999
 
-CROP_SIZE = 640      
+CROP_SIZE = 640
 LOW_LAYER_ROW_IDX = 0
 LAYER_MODE = os.environ.get("UAV_LAYER_MODE", "auto").strip().lower()
 if LAYER_MODE not in ("auto", "high", "low"):
@@ -314,8 +192,6 @@ HIGH_TRACK_SEARCH_MAX_ROIS = max(
 )
 HIGH_TRACK_SEARCH_MIN_RECENT_HITS = max(1, int(os.environ.get("UAV_HIGH_TRACK_SEARCH_MIN_RECENT_HITS", "1")))
 HIGH_TRACK_SEARCH_MIN_SCORE = float(os.environ.get("UAV_HIGH_TRACK_SEARCH_MIN_SCORE", "0.25"))
-TRACK_SEARCH_RECHECK_MIN_GAP_FRAMES = max(0, int(os.environ.get("UAV_TRACK_RECHECK_MIN_GAP_FRAMES", "0")))
-TRACK_SEARCH_VISUAL_LOCK_ONLY = _env_bool("UAV_TRACK_RECHECK_VISUAL_LOCK_ONLY", False)
 LOW_BG_SAMPLE_FRAMES = 40
 LOW_BG_ABS_DELTA = 12
 LOW_BG_STD_MULT = 3.0
@@ -341,10 +217,6 @@ MOTION_ZOOM_CROP_SIZE = max(0, int(os.environ.get("UAV_MOTION_ZOOM_CROP_SIZE", s
 MOTION_ZOOM_MAX_ROIS = max(0, int(os.environ.get("UAV_MOTION_ZOOM_MAX_ROIS", "1")))
 TRACK_ZOOM_CROP_SIZE = max(0, int(os.environ.get("UAV_TRACK_ZOOM_CROP_SIZE", str(MOTION_ZOOM_CROP_SIZE))))
 FULLFRAME_FALLBACK_ONLY = _env_bool("UAV_FULLFRAME_FALLBACK_ONLY", DEFAULT_FULLFRAME_FALLBACK_ONLY)
-ENABLE_FULLFRAME_SEARCH_FALLBACK = _env_bool("UAV_FULLFRAME_SEARCH_FALLBACK", False)
-FULLFRAME_SEARCH_INTERVAL_FRAMES = max(1, int(os.environ.get("UAV_FULLFRAME_SEARCH_INTERVAL_FRAMES", "90")))
-FULLFRAME_SEARCH_NO_YOLO_GAP_FRAMES = max(0, int(os.environ.get("UAV_FULLFRAME_SEARCH_NO_YOLO_GAP_FRAMES", "45")))
-FULLFRAME_SEARCH_SCORE = float(os.environ.get("UAV_FULLFRAME_SEARCH_SCORE", "0.5"))
 DIFF_THRESH = 4 if HIGH_LAYER_MODE else 8
 MIN_LOCAL_DIFF_MEAN = 10.0
 HIGH_LAYER_MIN_LOCAL_DIFF_MEAN = float(os.environ.get("UAV_HIGH_MIN_LOCAL_DIFF_MEAN", "4.0"))
@@ -497,8 +369,6 @@ def make_layer_profile(high, reason="global", day_scene=None, layer_confidence=0
         "track_search_min_yolo_hits": TRACK_SEARCH_MIN_YOLO_HITS,
         "track_search_min_recent_hits": HIGH_TRACK_SEARCH_MIN_RECENT_HITS if high else TRACK_SEARCH_MIN_RECENT_HITS,
         "track_search_min_score": HIGH_TRACK_SEARCH_MIN_SCORE if high else TRACK_SEARCH_MIN_SCORE,
-        "track_search_recheck_min_gap_frames": TRACK_SEARCH_RECHECK_MIN_GAP_FRAMES,
-        "track_search_visual_lock_only": TRACK_SEARCH_VISUAL_LOCK_ONLY,
         "track_search_require_current_motion": False if high else TRACK_REQUIRE_CURRENT_MOTION,
         "enable_tight_motion_roi": bool(ENABLE_TIGHT_MOTION_ROI and not high),
         "enable_static_bg_change_gate": False if high else True,
@@ -925,118 +795,6 @@ def crop_roi_from_center(cx, cy, full_w, full_h, crop_size=CROP_SIZE):
     y1 = max(0, y2 - crop_size)
     return [x1, y1, x2, y2]
 
-
-def _filter_isolated_gray_seed_candidates(candidates, radius, max_neighbors):
-    if not candidates:
-        return []
-    cell = max(8, int(radius))
-    radius2 = float(radius * radius)
-    grid = {}
-    for idx, cand in enumerate(candidates):
-        key = (int(cand["cx"] // cell), int(cand["cy"] // cell))
-        grid.setdefault(key, []).append(idx)
-
-    isolated = []
-    for idx, cand in enumerate(candidates):
-        gx, gy = int(cand["cx"] // cell), int(cand["cy"] // cell)
-        neighbor_count = 0
-        for yy in range(gy - 1, gy + 2):
-            for xx in range(gx - 1, gx + 2):
-                for other_idx in grid.get((xx, yy), []):
-                    if other_idx == idx:
-                        continue
-                    other = candidates[other_idx]
-                    dx = float(other["cx"] - cand["cx"])
-                    dy = float(other["cy"] - cand["cy"])
-                    if dx * dx + dy * dy <= radius2:
-                        neighbor_count += 1
-                        if neighbor_count > max_neighbors:
-                            break
-                if neighbor_count > max_neighbors:
-                    break
-            if neighbor_count > max_neighbors:
-                break
-        if neighbor_count <= max_neighbors:
-            isolated.append(cand)
-    return isolated
-
-
-def gray_seed_rois_from_frame(gray, scale_x, scale_y, full_w, full_h):
-    profile = current_layer_profile()
-    if (
-        not ENABLE_GRU_GRAY_SEED_ROIS
-        or not profile.get("high", False)
-        or GRU_GRAY_SEED_MAX_ROIS <= 0
-        or gray is None
-    ):
-        return []
-    if len(gray.shape) != 2:
-        gray = frame_to_gray(gray)
-    if gray is None or gray.size == 0:
-        return []
-
-    h, w = gray.shape[:2]
-    sky_y_limit = int(round(h * GRU_GRAY_SEED_SKY_Y_RATIO))
-    scale_linear = math.sqrt((w * h) / (1280.0 * 720.0))
-    radius = GRU_GRAY_SEED_RADIUS * max(0.25, scale_linear)
-    border = min(GRU_GRAY_SEED_BORDER, max(0, min(w, h) // 4))
-
-    all_candidates = []
-    for thresh in (GRU_GRAY_SEED_THRESH, GRU_GRAY_SEED_RELAXED_THRESH):
-        _, mask = cv2.threshold(gray, int(thresh), 255, cv2.THRESH_BINARY_INV)
-        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        candidates = []
-        for c in cnts:
-            x, y, bw, bh = cv2.boundingRect(c)
-            if bw <= 0 or bh <= 0:
-                continue
-            area = int(bw * bh)
-            if area < GRU_GRAY_SEED_MIN_AREA or area > GRU_GRAY_SEED_MAX_AREA:
-                continue
-            cx = int(x + bw * 0.5)
-            cy = int(y + bh * 0.5)
-            if cx < border or cy < border or cx >= w - border or cy >= h - border:
-                continue
-            if cy > sky_y_limit:
-                continue
-            patch = gray[y:y + bh, x:x + bw]
-            if patch.size == 0:
-                continue
-            contrast = max(0, int(thresh) - int(np.min(patch)))
-            compactness = float(cv2.contourArea(c)) / max(1.0, float(area))
-            score = GRU_GRAY_SEED_SCORE_BONUS + contrast * max(1.0, math.sqrt(area)) + 4.0 * compactness
-            candidates.append({
-                "x": x,
-                "y": y,
-                "w": bw,
-                "h": bh,
-                "cx": cx,
-                "cy": cy,
-                "area": area,
-                "score": float(score),
-            })
-        isolated = _filter_isolated_gray_seed_candidates(candidates, radius, GRU_GRAY_SEED_MAX_NEIGHBORS)
-        all_candidates.extend(isolated)
-        if all_candidates:
-            break
-
-    if not all_candidates:
-        return []
-
-    by_cell = {}
-    for cand in sorted(all_candidates, key=lambda c: c["score"], reverse=True):
-        key = (int(cand["cx"] // 24), int(cand["cy"] // 24))
-        if key not in by_cell:
-            by_cell[key] = cand
-
-    rois = []
-    for cand in sorted(by_cell.values(), key=lambda c: c["score"], reverse=True)[:GRU_GRAY_SEED_MAX_ROIS]:
-        fx = int(round(cand["cx"] * scale_x))
-        fy = int(round(cand["cy"] * scale_y))
-        rx1, ry1, rx2, ry2 = crop_roi_from_center(fx, fy, full_w, full_h)
-        rois.append((rx1, ry1, rx2, ry2, float(cand["score"])))
-    return prioritize_diverse_rois(rois, full_w, full_h)
-
 def frame_to_gray(frame):
     if frame is None:
         return None
@@ -1354,190 +1112,6 @@ class TrajectoryFilter:
             return 0.55
         return self._clamp01((float(raw) + 1.0) * 0.5)
 
-    def _disable_visual_lock(self, trk):
-        trk['visual_lock'] = False
-        trk['visual_lock_conf'] = 0.0
-        trk['visual_lock_recheck_due'] = False
-        trk['visual_lock_overdue_frames'] = 0
-
-    def _visual_lock_yolo_gap(self, trk, frame_idx):
-        last_yolo_frame = int(trk.get('last_yolo_frame', trk.get('last_frame', frame_idx)))
-        return max(0, int(frame_idx) - last_yolo_frame)
-
-    def _recent_yolo_hits(self, trk, count=None):
-        history = list(trk.get('yolo_hit_history', trk.get('hit_history', [])))
-        if count is not None and count > 0:
-            history = history[-int(count):]
-        return int(sum(1 for v in history if v))
-
-    def _green_yolo_streak(self, trk):
-        streak = 0
-        for hit in reversed(list(trk.get('yolo_hit_history', trk.get('hit_history', [])))):
-            if not hit:
-                break
-            streak += 1
-        return streak
-
-    def _mean_yolo_conf(self, trk):
-        conf_history = list(trk.get('yolo_conf_history', trk.get('det_conf_history', [])))
-        return float(np.mean(conf_history)) if conf_history else 0.0
-
-    def _visual_lock_entry_stability(self, trk):
-        boxes = list(trk.get('yolo_box_history', []))
-        if len(boxes) < 3:
-            return 0.0, 0.0
-        keep = min(len(boxes), max(3, VISUAL_LOCK_ENTER_GREEN_STREAK))
-        recent = np.array(boxes[-keep:], dtype=np.float32)
-        centers = np.column_stack(((recent[:, 0] + recent[:, 2]) * 0.5, (recent[:, 1] + recent[:, 3]) * 0.5))
-        median_center = np.median(centers, axis=0)
-        center_jitter = float(np.max(np.linalg.norm(centers - median_center, axis=1)))
-        sizes = np.column_stack((np.maximum(1.0, recent[:, 2] - recent[:, 0]), np.maximum(1.0, recent[:, 3] - recent[:, 1])))
-        median_size = np.maximum(1.0, np.median(sizes, axis=0))
-        box_jitter = float(np.max(np.abs(sizes - median_size) / median_size))
-        return center_jitter, box_jitter
-
-    def _yolo_box_stability(self, trk, keep):
-        boxes = list(trk.get('yolo_box_history', []))
-        if len(boxes) < max(2, int(keep)):
-            return None
-        recent = np.array(boxes[-int(keep):], dtype=np.float32)
-        centers = np.column_stack(((recent[:, 0] + recent[:, 2]) * 0.5, (recent[:, 1] + recent[:, 3]) * 0.5))
-        median_center = np.median(centers, axis=0)
-        center_jitter = float(np.max(np.linalg.norm(centers - median_center, axis=1)))
-        sizes = np.column_stack((np.maximum(1.0, recent[:, 2] - recent[:, 0]), np.maximum(1.0, recent[:, 3] - recent[:, 1])))
-        median_size = np.maximum(1.0, np.median(sizes, axis=0))
-        box_jitter = float(np.max(np.abs(sizes - median_size) / median_size))
-        return center_jitter, box_jitter
-
-    def _maybe_enter_visual_lock(self, trk, frame_idx):
-        if not ENABLE_VISUAL_LOCK or not self.profile.get("high", False):
-            return False
-        if trk.get('visual_lock', False):
-            return True
-        if trk.get('yolo_hits', 0) < VISUAL_LOCK_ENTER_YOLO_HITS:
-            return False
-        if self._recent_yolo_hits(trk) < VISUAL_LOCK_ENTER_RECENT_HITS:
-            return False
-        if self._green_yolo_streak(trk) < VISUAL_LOCK_ENTER_GREEN_STREAK:
-            return False
-        if trk.get('misses', 0) > 0:
-            return False
-        if not self._is_confirmed(trk):
-            return False
-        traj_score = self._trajectory_score(trk)
-        if float(trk.get('score', 0.0)) < VISUAL_LOCK_ENTER_TRACK_SCORE:
-            return False
-        if traj_score < VISUAL_LOCK_ENTER_TRAJ_SCORE:
-            return False
-        if self._mean_yolo_conf(trk) < VISUAL_LOCK_ENTER_MEAN_CONF:
-            return False
-        if self._net_motion_px(trk) < VISUAL_LOCK_ENTER_MIN_NET_MOTION:
-            return False
-        center_jitter, box_jitter = self._visual_lock_entry_stability(trk)
-        if center_jitter > VISUAL_LOCK_ENTER_MAX_CENTER_JITTER:
-            return False
-        if box_jitter > VISUAL_LOCK_ENTER_MAX_BOX_JITTER_RATIO:
-            return False
-        trk['visual_lock'] = True
-        trk['visual_lock_hits'] = 0
-        trk['visual_lock_misses'] = 0
-        trk['visual_lock_conf'] = max(float(trk.get('visual_lock_conf', 0.0)), VISUAL_LOCK_CONF_ENTER)
-        trk['visual_lock_entry_score'] = float(trk.get('score', 0.0))
-        trk['visual_lock_entry_traj_score'] = float(traj_score)
-        trk['visual_lock_entry_mean_conf'] = float(self._mean_yolo_conf(trk))
-        trk['visual_lock_enter_frame'] = int(frame_idx)
-        trk['last_yolo_frame'] = int(trk.get('last_yolo_frame', trk.get('last_frame', frame_idx)))
-        trk['visual_lock_recheck_due'] = False
-        trk['visual_lock_overdue_frames'] = 0
-        return True
-
-    def _find_visual_lock_detection(self, trk, frame, frame_idx):
-        if frame is None:
-            return None
-        gray = frame_to_gray(frame)
-        if gray is None or gray.size == 0:
-            return None
-        full_h, full_w = gray.shape[:2]
-        pred_cx, pred_cy, _ = self._predict_center(trk, frame_idx)
-        win = int(VISUAL_LOCK_WINDOW + 20 * min(3, int(trk.get('visual_lock_misses', 0))))
-        half = win // 2
-        x1 = max(0, int(round(pred_cx)) - half)
-        y1 = max(0, int(round(pred_cy)) - half)
-        x2 = min(full_w, x1 + win)
-        y2 = min(full_h, y1 + win)
-        x1 = max(0, x2 - win)
-        y1 = max(0, y2 - win)
-        patch = gray[y1:y2, x1:x2]
-        if patch.shape[0] < 24 or patch.shape[1] < 24:
-            return None
-
-        patch_f = patch.astype(np.float32)
-        smooth = cv2.GaussianBlur(patch_f, (0, 0), 1.2)
-        bg = cv2.GaussianBlur(patch_f, (0, 0), 9.0)
-        response = np.maximum(bg - smooth, smooth - bg)
-        resp_mean = float(np.mean(response))
-        resp_std = float(np.std(response))
-        thresh = max(float(VISUAL_LOCK_MIN_RESPONSE), resp_mean + 2.2 * resp_std)
-        mask = (response >= thresh).astype(np.uint8) * 255
-        mask = cv2.morphologyEx(
-            mask,
-            cv2.MORPH_OPEN,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-        )
-        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        best = None
-        max_dist = max(18.0, VISUAL_LOCK_MAX_DIST_RATIO * float(win))
-        for c in cnts:
-            bx, by, bw, bh = cv2.boundingRect(c)
-            if bw <= 0 or bh <= 0:
-                continue
-            area = int(cv2.countNonZero(mask[by:by + bh, bx:bx + bw]))
-            if area < 1 or area > VISUAL_LOCK_MAX_AREA:
-                continue
-            cx = x1 + bx + bw * 0.5
-            cy = y1 + by + bh * 0.5
-            dist = math.hypot(cx - pred_cx, cy - pred_cy)
-            if dist > max_dist:
-                continue
-            active = mask[by:by + bh, bx:bx + bw] > 0
-            if not np.any(active):
-                continue
-            resp_score = float(np.mean(response[by:by + bh, bx:bx + bw][active]))
-            if resp_score < VISUAL_LOCK_MIN_RESPONSE:
-                continue
-            compactness = float(area) / max(1.0, float(bw * bh))
-            box_side = max(
-                VISUAL_LOCK_MIN_BOX,
-                min(
-                    VISUAL_LOCK_MAX_BOX,
-                    int(round(max(float(trk.get('w', 1.0)), float(trk.get('h', 1.0))))),
-                ),
-            )
-            det = [
-                int(max(0, round(cx - box_side * 0.5))),
-                int(max(0, round(cy - box_side * 0.5))),
-                int(min(full_w, round(cx + box_side * 0.5))),
-                int(min(full_h, round(cy + box_side * 0.5))),
-                0.52,
-                0.0,
-                1.0,
-            ]
-            tmpl_score = self._template_score(trk, frame, det)
-            if tmpl_score < VISUAL_LOCK_MIN_TEMPLATE:
-                continue
-            score = (
-                resp_score
-                + 7.0 * compactness
-                + VISUAL_LOCK_TEMPLATE_WEIGHT * 20.0 * tmpl_score
-                - 0.065 * dist
-            )
-            if score < VISUAL_LOCK_MIN_SCORE:
-                continue
-            if best is None or score > best[0]:
-                best = (score, det, tmpl_score, resp_score)
-        return best
-
     def _predict_center(self, trk, frame_idx):
         dt = max(1, int(frame_idx) - int(trk['last_frame']))
         return trk['cx'] + trk['vx'] * dt, trk['cy'] + trk['vy'] * dt, dt
@@ -1602,36 +1176,6 @@ class TrajectoryFilter:
         if len(pts) < 3:
             return 0.0
         return math.sqrt((pts[-1][0] - pts[0][0])**2 + (pts[-1][1] - pts[0][1])**2)
-
-    def _recent_net_motion_px(self, trk, window=8):
-        pts = list(trk.get('history', []))
-        if len(pts) < 2:
-            return 0.0
-        pts = pts[-max(2, int(window)):]
-        return math.sqrt((pts[-1][0] - pts[0][0])**2 + (pts[-1][1] - pts[0][1])**2)
-
-    def _track_speed_px_per_frame(self, trk):
-        return math.sqrt(float(trk.get('vx', 0.0)) ** 2 + float(trk.get('vy', 0.0)) ** 2)
-
-    def _is_hover_candidate(self, trk, frame_idx):
-        if not ENABLE_HOVER_HOLD:
-            return False
-        if trk.get('yolo_hits', 0) < HOVER_ENTER_YOLO_HITS:
-            return False
-        if self._recent_yolo_hits(trk, self.recent_window) < HOVER_ENTER_RECENT_HITS:
-            return False
-        if float(trk.get('score', 0.0)) < HOVER_MIN_TRACK_SCORE:
-            return False
-        if not self._is_confirmed(trk):
-            return False
-        if self._track_speed_px_per_frame(trk) > HOVER_MAX_SPEED_PX_PER_FRAME:
-            return False
-        if self._recent_net_motion_px(trk, HOVER_RECENT_WINDOW) > HOVER_MAX_RECENT_NET_MOTION_PX:
-            return False
-        yolo_gap = self._visual_lock_yolo_gap(trk, frame_idx)
-        if yolo_gap > HOVER_MAX_YOLO_GAP_FRAMES:
-            return False
-        return True
 
     def _adaptive_required_hits(self, trk):
         required = int(self.min_hits)
@@ -1741,20 +1285,10 @@ class TrajectoryFilter:
             'history': deque([(cx, cy)], maxlen=self.recent_window),
             'hit_history': deque([1], maxlen=self.recent_window),
             'det_conf_history': deque([self._det_score(det)], maxlen=self.recent_window),
-            'yolo_hit_history': deque([1], maxlen=self.recent_window),
-            'yolo_conf_history': deque([self._det_score(det)], maxlen=self.recent_window),
-            'yolo_box_history': deque([det[:4]], maxlen=self.recent_window),
             'background_risk_history': deque([self._det_background_risk(det)], maxlen=self.recent_window),
             'seed_alignment_history': deque([self._det_seed_alignment(det)], maxlen=self.recent_window),
             'frame_h': int(frame.shape[0]) if frame is not None else CAPTURE_H,
             'template': self._crop_template(frame, det),
-            'visual_lock': False,
-            'visual_lock_hits': 0,
-            'visual_lock_misses': 0,
-            'visual_lock_conf': 0.0,
-            'visual_lock_recheck_due': False,
-            'visual_lock_overdue_frames': 0,
-            'last_yolo_frame': int(frame_idx),
         }
         self.next_id += 1
         self.trackers.append(trk)
@@ -1771,23 +1305,15 @@ class TrajectoryFilter:
         trk['w'], trk['h'] = self._box_wh(det)
         trk['box'] = det[:4]
         trk['last_frame'] = int(frame_idx)
-        trk['last_yolo_frame'] = int(frame_idx)
         trk['hits'] += 1
         trk['yolo_hits'] = trk.get('yolo_hits', 0) + 1
         trk['misses'] = 0
-        trk['visual_lock_misses'] = 0
-        trk['visual_lock_recheck_due'] = False
-        trk['visual_lock_overdue_frames'] = 0
         trk['score'] = self._clamp01(0.75 * trk['score'] + 0.25 * match_score)
         trk['history'].append((cx, cy))
         trk['hit_history'].append(1)
         trk['det_conf_history'].append(self._det_score(det))
-        trk.setdefault('yolo_hit_history', deque(maxlen=self.recent_window)).append(1)
-        trk.setdefault('yolo_conf_history', deque(maxlen=self.recent_window)).append(self._det_score(det))
-        trk.setdefault('yolo_box_history', deque(maxlen=self.recent_window)).append(det[:4])
         trk['background_risk_history'].append(self._det_background_risk(det))
         trk['seed_alignment_history'].append(self._det_seed_alignment(det))
-        trk['visual_lock_conf'] = max(float(trk.get('visual_lock_conf', 0.0)), VISUAL_LOCK_CONF_ENTER if trk.get('visual_lock', False) else 0.0)
         if frame is not None:
             trk['frame_h'] = int(frame.shape[0])
         new_template = self._crop_template(frame, det)
@@ -1797,69 +1323,12 @@ class TrajectoryFilter:
             elif tmpl_score >= 0.45 and match_score >= 0.45:
                 trk['template'] = cv2.addWeighted(trk['template'], 0.85, new_template, 0.15, 0)
 
-    def _update_track_visual(self, trk, det, frame, frame_idx, lock_score, tmpl_score):
-        raw_cx, raw_cy = self._center(det)
-        pred_cx, pred_cy, _ = self._predict_center(trk, frame_idx)
-        alpha_pos = float(VISUAL_LOCK_SMOOTH_ALPHA)
-        cx = (1.0 - alpha_pos) * pred_cx + alpha_pos * raw_cx
-        cy = (1.0 - alpha_pos) * pred_cy + alpha_pos * raw_cy
-        dt = max(1, int(frame_idx) - int(trk['last_frame']))
-        nvx = (cx - trk['cx']) / dt
-        nvy = (cy - trk['cy']) / dt
-        alpha = 0.28
-        trk['vx'] = alpha * nvx + (1.0 - alpha) * trk['vx']
-        trk['vy'] = alpha * nvy + (1.0 - alpha) * trk['vy']
-        trk['cx'], trk['cy'] = cx, cy
-        det_w, det_h = self._box_wh(det)
-        trk['w'] = 0.88 * float(trk.get('w', det_w)) + 0.12 * det_w
-        trk['h'] = 0.88 * float(trk.get('h', det_h)) + 0.12 * det_h
-        full_h = int(frame.shape[0]) if frame is not None else int(trk.get('frame_h', CAPTURE_H))
-        full_w = int(frame.shape[1]) if frame is not None else CAPTURE_W
-        trk['box'] = [
-            int(max(0, round(cx - trk['w'] * 0.5))),
-            int(max(0, round(cy - trk['h'] * 0.5))),
-            int(min(full_w, round(cx + trk['w'] * 0.5))),
-            int(min(full_h, round(cy + trk['h'] * 0.5))),
-        ]
-        trk['last_frame'] = int(frame_idx)
-        trk['hits'] += 1
-        trk['misses'] = 0
-        trk['visual_lock_hits'] = int(trk.get('visual_lock_hits', 0)) + 1
-        trk['visual_lock_misses'] = 0
-        trk['visual_lock_overdue_frames'] = max(
-            0,
-            self._visual_lock_yolo_gap(trk, frame_idx) - VISUAL_LOCK_RECHECK_INTERVAL,
-        )
-        lock_obs = self._clamp01(
-            0.45 * min(1.0, lock_score / max(VISUAL_LOCK_MIN_SCORE * 2.0, 1.0))
-            + 0.35 * tmpl_score
-            + 0.20 * min(1.0, lock_score / 35.0)
-        )
-        prev_lock_conf = float(trk.get('visual_lock_conf', VISUAL_LOCK_CONF_ENTER))
-        trk['visual_lock_conf'] = self._clamp01(
-            (1.0 - VISUAL_LOCK_CONF_GAIN) * prev_lock_conf + VISUAL_LOCK_CONF_GAIN * lock_obs
-        )
-        trk['score'] = self._clamp01(0.94 * trk['score'] + 0.06 * lock_obs)
-        trk['history'].append((cx, cy))
-        trk['hit_history'].append(1)
-        trk['background_risk_history'].append(0.0)
-        trk['seed_alignment_history'].append(1.0)
-        if frame is not None:
-            trk['frame_h'] = int(frame.shape[0])
-        new_template = self._crop_template(frame, det)
-        if new_template is not None:
-            if trk.get('template') is None:
-                trk['template'] = new_template
-            elif tmpl_score >= 0.50 and trk.get('visual_lock_conf', 0.0) >= VISUAL_LOCK_TEMPLATE_UPDATE_MIN_CONF:
-                trk['template'] = cv2.addWeighted(trk['template'], 0.93, new_template, 0.07, 0)
-
     def _miss_track(self, trk):
         trk['misses'] += 1
         trk['vx'] *= MISS_VELOCITY_DECAY
         trk['vy'] *= MISS_VELOCITY_DECAY
         trk['score'] = self._clamp01(trk['score'] * 0.92)
         trk['hit_history'].append(0)
-        trk.setdefault('yolo_hit_history', deque(maxlen=self.recent_window)).append(0)
 
     def _basic_is_confirmed(self, trk):
         recent_hits = sum(trk['hit_history'])
@@ -1883,42 +1352,7 @@ class TrajectoryFilter:
             and traj_score >= TRACKER_MIN_TRAJ_SCORE
         )
 
-    def _is_static_confirmed(self, trk):
-        if not ENABLE_STATIC_CONFIRM:
-            return False
-        if trk.get('yolo_hits', 0) < STATIC_CONFIRM_YOLO_HITS:
-            return False
-        if self._recent_yolo_hits(trk, self.recent_window) < STATIC_CONFIRM_RECENT_HITS:
-            return False
-        if trk.get('misses', 0) > STATIC_CONFIRM_MAX_MISSES:
-            return False
-        if float(trk.get('score', 0.0)) < STATIC_CONFIRM_MIN_SCORE:
-            return False
-        if self._mean_yolo_conf(trk) < STATIC_CONFIRM_MIN_MEAN_CONF:
-            return False
-        if self._track_speed_px_per_frame(trk) > STATIC_CONFIRM_MAX_SPEED_PX_PER_FRAME:
-            return False
-        if self._recent_net_motion_px(trk, STATIC_CONFIRM_RECENT_WINDOW) > STATIC_CONFIRM_MAX_RECENT_NET_MOTION_PX:
-            return False
-        stability = self._yolo_box_stability(trk, STATIC_CONFIRM_RECENT_HITS)
-        if stability is None:
-            return False
-        center_jitter, box_jitter = stability
-        if center_jitter > STATIC_CONFIRM_MAX_CENTER_JITTER:
-            return False
-        if box_jitter > STATIC_CONFIRM_MAX_BOX_JITTER_RATIO:
-            return False
-        risk_history = list(trk.get('background_risk_history', []))
-        align_history = list(trk.get('seed_alignment_history', []))
-        bg_risk = float(np.median(risk_history[-STATIC_CONFIRM_RECENT_HITS:])) if risk_history else 0.0
-        seed_alignment = float(np.median(align_history[-STATIC_CONFIRM_RECENT_HITS:])) if align_history else 1.0
-        if bg_risk > STATIC_CONFIRM_MAX_BG_RISK and seed_alignment < STATIC_CONFIRM_MIN_SEED_ALIGNMENT:
-            return False
-        return True
-
     def _is_confirmed(self, trk):
-        if self._is_static_confirmed(trk):
-            return True
         if not self._basic_is_confirmed(trk):
             return False
         if not self._passes_adaptive_background_confirmation(trk):
@@ -1961,59 +1395,6 @@ class TrajectoryFilter:
         self.trackers = kept
         return [t['box'] for t in self.get_confirmed_tracks(frame_idx)]
 
-    def update_visual_locks(self, frame=None, frame_idx=0):
-        if not ENABLE_VISUAL_LOCK or not self.profile.get("high", False) or frame is None:
-            return 0
-        updated = 0
-        for trk in self.trackers:
-            if int(trk.get('last_frame', -1)) >= int(frame_idx):
-                continue
-            if not self._maybe_enter_visual_lock(trk, frame_idx):
-                continue
-            yolo_gap = self._visual_lock_yolo_gap(trk, frame_idx)
-            overdue_frames = max(0, yolo_gap - VISUAL_LOCK_RECHECK_INTERVAL)
-            recheck_due = overdue_frames > 0
-            trk['visual_lock_recheck_due'] = recheck_due
-            trk['visual_lock_overdue_frames'] = overdue_frames
-            if (
-                yolo_gap > VISUAL_LOCK_MAX_NO_YOLO_FRAMES
-                or overdue_frames > VISUAL_LOCK_RECHECK_GRACE_FRAMES
-            ):
-                self._disable_visual_lock(trk)
-                continue
-            found = self._find_visual_lock_detection(trk, frame, frame_idx)
-            if found is None:
-                trk['visual_lock_misses'] = int(trk.get('visual_lock_misses', 0)) + 1
-                prev_lock_conf = float(trk.get('visual_lock_conf', VISUAL_LOCK_CONF_ENTER))
-                trk['visual_lock_conf'] = self._clamp01((1.0 - VISUAL_LOCK_CONF_DECAY) * prev_lock_conf)
-                if (
-                    trk['visual_lock_misses'] > VISUAL_LOCK_MAX_MISSES
-                    or float(trk.get('visual_lock_conf', 0.0)) < VISUAL_LOCK_CONF_EXIT
-                ):
-                    self._disable_visual_lock(trk)
-                continue
-            lock_score, det, tmpl_score, _resp_score = found
-            self._update_track_visual(trk, det, frame, frame_idx, lock_score, tmpl_score)
-            if recheck_due:
-                prev_lock_conf = float(trk.get('visual_lock_conf', VISUAL_LOCK_CONF_ENTER))
-                trk['visual_lock_conf'] = self._clamp01((1.0 - VISUAL_LOCK_RECHECK_DECAY) * prev_lock_conf)
-            if float(trk.get('visual_lock_conf', 0.0)) < VISUAL_LOCK_CONF_EXIT:
-                self._disable_visual_lock(trk)
-                continue
-            updated += 1
-        return updated
-
-    def has_recent_yolo_track(self, frame_idx, max_gap_frames=45):
-        for trk in self.trackers:
-            if trk.get('yolo_hits', 0) <= 0:
-                continue
-            if float(trk.get('score', 0.0)) < 0.18:
-                continue
-            last_yolo_frame = int(trk.get('last_yolo_frame', trk.get('last_frame', frame_idx)))
-            if int(frame_idx) - last_yolo_frame <= int(max_gap_frames):
-                return True
-        return False
-
     def get_yolo_seeded_search_rois(self, frame_idx, full_w, full_h, max_rois=MAX_TRACK_ROIS_PER_FRAME):
         rois = []
         max_age_frames = int(self.profile.get("track_search_max_age_frames", TRACK_SEARCH_MAX_AGE_FRAMES))
@@ -2022,20 +1403,12 @@ class TrajectoryFilter:
         min_yolo_hits = int(self.profile.get("track_search_min_yolo_hits", TRACK_SEARCH_MIN_YOLO_HITS))
         min_recent_hits = int(self.profile.get("track_search_min_recent_hits", TRACK_SEARCH_MIN_RECENT_HITS))
         min_score = float(self.profile.get("track_search_min_score", TRACK_SEARCH_MIN_SCORE))
-        recheck_min_gap_frames = int(self.profile.get("track_search_recheck_min_gap_frames", 0))
-        visual_lock_only = bool(self.profile.get("track_search_visual_lock_only", False))
         for trk in self.trackers:
             track_age = max(0, int(frame_idx) - int(trk.get('last_frame', frame_idx)))
             if track_age > max_age_frames:
                 continue
             if trk['misses'] > YOLO_TRACK_MAX_SEARCH_MISSES:
                 continue
-            if visual_lock_only and not trk.get('visual_lock', False):
-                continue
-            if recheck_min_gap_frames > 0:
-                last_yolo_frame = int(trk.get('last_yolo_frame', trk.get('last_frame', frame_idx)))
-                if int(frame_idx) - last_yolo_frame < recheck_min_gap_frames:
-                    continue
             if self.profile["track_search_confirmed_only"] and not self._is_confirmed(trk):
                 continue
             if self.profile["track_search_min_net_motion_px"] > 0.0 and self._net_motion_px(trk) < self.profile["track_search_min_net_motion_px"]:
@@ -2057,32 +1430,6 @@ class TrajectoryFilter:
                 rois.append((rx1, ry1, rx2, ry2, priority, 0, 0, cx, cy, "zoom"))
             else:
                 rois.append((rx1, ry1, rx2, ry2, priority))
-        rois = merge_nearby_boxes(rois, dist_thresh=160)
-        rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
-        return rois[:max_rois]
-
-    def get_hover_recheck_rois(self, frame_idx, full_w, full_h, max_rois=1):
-        if not ENABLE_HOVER_HOLD:
-            return []
-        rois = []
-        for trk in self.trackers:
-            if not self._is_hover_candidate(trk, frame_idx):
-                continue
-            yolo_gap = self._visual_lock_yolo_gap(trk, frame_idx)
-            if yolo_gap < HOVER_RECHECK_INTERVAL_FRAMES:
-                continue
-            if yolo_gap % HOVER_RECHECK_INTERVAL_FRAMES > max(1, PROCESS_EVERY_N_FRAMES):
-                continue
-            pred_cx, pred_cy, _ = self._predict_center(trk, frame_idx)
-            rx1, ry1, rx2, ry2 = crop_roi_from_center(
-                pred_cx,
-                pred_cy,
-                full_w,
-                full_h,
-                crop_size=min(HOVER_ROI_SIZE, max(full_w, full_h)),
-            )
-            priority = 1400.0 + float(trk.get('score', 0.0)) - 3.0 * float(yolo_gap // HOVER_RECHECK_INTERVAL_FRAMES)
-            rois.append((rx1, ry1, rx2, ry2, priority, 0, 0, pred_cx, pred_cy, "zoom"))
         rois = merge_nearby_boxes(rois, dist_thresh=160)
         rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
         return rois[:max_rois]
@@ -2116,14 +1463,6 @@ class TrajectoryFilter:
                 'background_risk': background_risk,
                 'seed_alignment': float(np.median(seed_alignment_history)) if seed_alignment_history else 1.0,
                 'adaptive_evidence': adaptive_evidence,
-                'visual_lock': bool(trk.get('visual_lock', False)),
-                'visual_lock_hits': int(trk.get('visual_lock_hits', 0)),
-                'visual_lock_conf': float(trk.get('visual_lock_conf', 0.0)),
-                'visual_lock_recheck_due': bool(trk.get('visual_lock_recheck_due', False)),
-                'visual_lock_overdue_frames': int(trk.get('visual_lock_overdue_frames', 0)),
-                'yolo_gap_frames': self._visual_lock_yolo_gap(trk, frame_idx),
-                'static_confirmed': bool(self._is_static_confirmed(trk)),
-                'last_yolo_frame': int(trk.get('last_yolo_frame', trk.get('last_frame', frame_idx))),
             })
         return confirmed
 
@@ -2206,7 +1545,7 @@ def inference_worker(worker_idx=0):
     stale_by_cam = [0 for _ in range(N_CAM)]
     inferred_by_cam = [0 for _ in range(N_CAM)]
     next_cam = worker_idx % N_CAM
-    try: 
+    try:
         core_index = worker_idx if NPU_WORKER_COUNT > 1 else None
         yolo = YoloRKNN(
             MODEL_PATH,
@@ -2220,7 +1559,7 @@ def inference_worker(worker_idx=0):
         print(f"[Fatal] RKNN Init Failed: {type(e).__name__}: {e}", flush=True)
         stop_event.set()
         return
-    
+
     while not stop_event.is_set():
         did_work = False
         for offset in range(N_CAM):
@@ -2348,9 +1687,6 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                 "misses", "age", "traj_score", "yolo_hits",
                 "recent_hits", "net_motion_px", "mean_det_conf",
                 "background_risk", "seed_alignment", "adaptive_evidence",
-                "visual_lock", "visual_lock_hits", "visual_lock_conf",
-                "visual_lock_recheck_due", "visual_lock_overdue_frames", "yolo_gap_frames",
-                "static_confirmed",
             ],
         )
         detection_csv_writer.writeheader()
@@ -2382,13 +1718,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
     )
     f_idx = 0
     local_data_sender = DataSender(DATA_TARGETS, BOARD_ID)
-    v_sender = VideoSender(
-        VIDEO_TARGET_IP,
-        VIDEO_BASE_PORT,
-        width=VIDEO_STREAM_W,
-        height=VIDEO_STREAM_H,
-        quality=VIDEO_STREAM_QUALITY,
-    )
+    v_sender = VideoSender(VIDEO_TARGET_IP, VIDEO_BASE_PORT)
     learning_mode = True
     current_draw_boxes =[]
     bg_samples = []
@@ -2466,13 +1796,6 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             "background_risk": f"{float((track or {}).get('background_risk', box[5] if len(box) > 5 else 0.0)):.6f}",
             "seed_alignment": f"{float((track or {}).get('seed_alignment', box[6] if len(box) > 6 else 1.0)):.6f}",
             "adaptive_evidence": f"{float((track or {}).get('adaptive_evidence', 0.0)):.6f}",
-            "visual_lock": int(bool((track or {}).get("visual_lock", False))),
-            "visual_lock_hits": int((track or {}).get("visual_lock_hits", 0)),
-            "visual_lock_conf": f"{float((track or {}).get('visual_lock_conf', 0.0)):.6f}",
-            "visual_lock_recheck_due": int(bool((track or {}).get("visual_lock_recheck_due", False))),
-            "visual_lock_overdue_frames": int((track or {}).get("visual_lock_overdue_frames", 0)),
-            "yolo_gap_frames": int((track or {}).get("yolo_gap_frames", 0)),
-            "static_confirmed": int(bool((track or {}).get("static_confirmed", False))),
         })
 
     def drain_inference_results(current_frame, current_frame_idx, full_w, full_h):
@@ -2609,13 +1932,6 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             if not ret:
                 time.sleep(0.1)
                 continue
-        if (
-            SIMULATE_BY_VIDEOS
-            and VIDEO_TEST_RESIZE_W > 0
-            and VIDEO_TEST_RESIZE_H > 0
-            and (frame.shape[1] != VIDEO_TEST_RESIZE_W or frame.shape[0] != VIDEO_TEST_RESIZE_H)
-        ):
-            frame = cv2.resize(frame, (VIDEO_TEST_RESIZE_W, VIDEO_TEST_RESIZE_H), interpolation=cv2.INTER_AREA)
         gray_frame = None
         if len(frame.shape) == 2:
             gray_frame = frame
@@ -2689,17 +2005,12 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                 frame_t1 = gray_small
                 if not DIRECT_FULL_FRAME_INFERENCE:
                     continue
-            
+
             rois =[]
             motion_mask = None
             track_rois = (
                 tracker.get_yolo_seeded_search_rois(f_idx, W, H)
                 if ENABLE_TRAJECTORY_TRACKING and ENABLE_TRACK_SEARCH_ROIS
-                else []
-            )
-            hover_rois = (
-                tracker.get_hover_recheck_rois(f_idx, W, H, max_rois=1)
-                if ENABLE_TRAJECTORY_TRACKING and ENABLE_HOVER_HOLD
                 else []
             )
             track_roi_keys = set()
@@ -2732,28 +2043,14 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                     rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                     rois = prioritize_diverse_rois(rois, W, H)
 
-            gray_seed_rois = gray_seed_rois_from_frame(gray_small, scale_x, scale_y, W, H)
-            if gray_seed_rois:
-                rois = merge_nearby_boxes(gray_seed_rois + rois, dist_thresh=160)
-                rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
-                rois = prioritize_diverse_rois(rois, W, H)
-
             require_track_motion = bool(cam_profile.get("track_search_require_current_motion", TRACK_REQUIRE_CURRENT_MOTION))
             if ENABLE_FRAME_DIFF_ROIS and require_track_motion and track_rois:
                 track_rois = [r for r in track_rois if track_roi_has_motion(r, motion_mask, W, H)]
-            if ENABLE_FRAME_DIFF_ROIS and (track_rois or hover_rois):
-                track_roi_keys = {tuple(int(v) for v in r[:4]) for r in (track_rois + hover_rois)}
-                rois = merge_nearby_boxes(track_rois + hover_rois + rois, dist_thresh=160)
+            if ENABLE_FRAME_DIFF_ROIS and track_rois:
+                track_roi_keys = {tuple(int(v) for v in r[:4]) for r in track_rois}
+                rois = merge_nearby_boxes(track_rois + rois, dist_thresh=160)
                 rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                 rois = prioritize_diverse_rois(rois, W, H)
-
-            if (
-                ENABLE_FULLFRAME_SEARCH_FALLBACK
-                and not DIRECT_FULL_FRAME_INFERENCE
-                and (f_idx + cam_idx) % FULLFRAME_SEARCH_INTERVAL_FRAMES == 0
-                and not tracker.has_recent_yolo_track(f_idx, FULLFRAME_SEARCH_NO_YOLO_GAP_FRAMES)
-            ):
-                rois.append((0, 0, W, H, FULLFRAME_SEARCH_SCORE))
 
             if DIRECT_FULL_FRAME_INFERENCE:
                 zoom_rois = [r for r in rois if roi_is_zoom_crop(r)]
@@ -2832,23 +2129,16 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         new_raw_boxes, got_new_result = drain_inference_results(frame, f_idx, W, H)
         raw_boxes_in_this_frame.extend(new_raw_boxes)
         got_inference_result = got_inference_result or got_new_result
-        visual_lock_updates = 0
-        if (
-            ENABLE_TRAJECTORY_TRACKING
-            and ENABLE_VISUAL_LOCK
-            and (f_idx + cam_idx) % VISUAL_LOCK_EVERY_N_FRAMES == 0
-        ):
-            visual_lock_updates = tracker.update_visual_locks(frame=frame, frame_idx=f_idx)
 
         unique_raw_boxes = merge_nearby_boxes(raw_boxes_in_this_frame, dist_thresh=100)
-        
+
         for rb in unique_raw_boxes:
             if visual_enabled and DRAW_INTERMEDIATE_BOXES:
                 current_draw_boxes.append([rb[0], rb[1], rb[2], rb[3], (0, 0, 255), "Raw", 2])
 
 
         if ENABLE_TRAJECTORY_TRACKING:
-            tracker_query_frame = f_idx if visual_lock_updates > 0 else (last_tracker_update_frame if last_tracker_update_frame > 0 else f_idx)
+            tracker_query_frame = last_tracker_update_frame if last_tracker_update_frame > 0 else f_idx
             confirmed_tracks = tracker.get_confirmed_tracks(tracker_query_frame)
         else:
             confirmed_tracks = []
@@ -2869,16 +2159,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             box = t['box']
             write_detection_row("target", tracker_query_frame, f_idx, box, track=t)
             if visual_enabled:
-                if t.get('static_confirmed', False):
-                    label = "STATIC"
-                elif (
-                    t.get('visual_lock', False)
-                    and int(t.get('visual_lock_hits', 0)) > 0
-                    and float(t.get('visual_lock_conf', 0.0)) >= VISUAL_LOCK_CONF_EXIT
-                ):
-                    label = "RECHECK" if t.get('visual_lock_recheck_due', False) else "LOCK"
-                else:
-                    label = "TARGET"
+                label = "TARGET"
                 current_draw_boxes.append([box[0], box[1], box[2], box[3], (0, 255, 0), label, 1])
 
         if not learning_mode:
@@ -2890,8 +2171,8 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
 
         if draw_this_frame:
             try:
-                show_frame = cv2.resize(frame, (VIDEO_STREAM_W, VIDEO_STREAM_H), interpolation=cv2.INTER_AREA)
-                dsx, dsy = float(VIDEO_STREAM_W) / W, float(VIDEO_STREAM_H) / H
+                show_frame = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_AREA)
+                dsx, dsy = 640.0/W, 360.0/H
                 for x1, y1, x2, y2, color, text, _life in current_draw_boxes:
                     cv2.rectangle(show_frame, (int(x1*dsx), int(y1*dsy)), (int(x2*dsx), int(y2*dsy)), color, 1 if text in ("ROI", "TRKROI") else 2)
                 for i in range(len(current_draw_boxes)-1, -1, -1):
@@ -3019,14 +2300,6 @@ if __name__ == '__main__':
     )
     print(f"--> RKNN model: {os.path.abspath(MODEL_PATH)}", flush=True)
     print(f"--> Input mode: {'video-test' if SIMULATE_BY_VIDEOS else 'independent-cameras'}", flush=True)
-    print(f"--> Board id: {BOARD_ID} local_ips={get_local_ipv4s()}", flush=True)
-    print(
-        f"--> Video stream: target={VIDEO_TARGET_IP}:{VIDEO_BASE_PORT} "
-        f"size={VIDEO_STREAM_W}x{VIDEO_STREAM_H} quality={VIDEO_STREAM_QUALITY} "
-        f"cams={','.join(VIDEO_STREAM_CAM_SPECS) if VIDEO_STREAM_CAM_SPECS else 'all'} "
-        f"every={VIDEO_SEND_EVERY_N_FRAMES}",
-        flush=True,
-    )
     if not SIMULATE_BY_VIDEOS:
         print(
             f"--> Camera prebuild background: {'on' if ENABLE_CAMERA_PREBUILD_BG else 'off'} "
@@ -3038,7 +2311,6 @@ if __name__ == '__main__':
         print(
             f"--> Video test: path={VIDEO_TEST_PATH} paths={video_sources} cameras={N_CAM} "
             f"max_seconds={VIDEO_TEST_MAX_SECONDS:.1f} realtime={VIDEO_TEST_REALTIME} "
-            f"resize={VIDEO_TEST_RESIZE_W}x{VIDEO_TEST_RESIZE_H if VIDEO_TEST_RESIZE_W > 0 else 0} "
             f"output={VIDEO_TEST_OUTPUT or 'off'} save_rois={VIDEO_TEST_SAVE_ROIS_DIR or 'off'} "
             f"roi_seconds={VIDEO_TEST_SAVE_ROIS_START:.1f}-{VIDEO_TEST_SAVE_ROIS_END:.1f}",
             flush=True,
@@ -3087,7 +2359,7 @@ if __name__ == '__main__':
         for i in range(N_CAM):
             cv2.namedWindow(f"Cam {i}", cv2.WINDOW_NORMAL)
             cv2.resizeWindow(f"Cam {i}", 640, 360)
-    
+
     def timer_job():
         global INIT_SIGNAL_SENT, VIDEO_STREAM_ALLOWED
         while not stop_event.is_set():
@@ -3098,7 +2370,7 @@ if __name__ == '__main__':
                     video_allowed_event.set()
                 INIT_SIGNAL_SENT = True
             time.sleep(1)
-    
+
     threading.Thread(target=timer_job, daemon=True).start()
 
     try:
