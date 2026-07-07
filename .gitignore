@@ -11,6 +11,7 @@ _cleanup_backups/
 
 # Datasets and generated media
 record_2k_pure/
+artifacts/
 *.mp4
 *.avi
 *.mov

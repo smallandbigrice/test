@@ -1,128 +1,52 @@
 # main.py 更新规则
 
-本文档用于约束本仓库后续对 `main.py` 的修改流程，避免出现“代码已经本地改了，但没有同步到 GitHub，也没有留下版本说明”的情况。
+本文件约束 `main.py`、板端测试代码和相关文档的修改流程。
 
 ## 固定要求
 
-每次修改 `main.py` 后，必须同时完成以下两件事：
+1. 修改 `main.py` 时，同时在 `docs/main_updates/` 新增中文说明。
+2. 说明至少包含修改目标、算法变化、参数变化、验证方法、验证结果和回退方法。
+3. 视频推理阶段优先修改 `videomain.py`；只有板端视频验证达到预期后，才同步到正式 `main.py`。
+4. 用户明确要求“暂不上传 GitHub”时，只保留本地修改，不提交、不推送。
+5. 用户允许上传后，使用新的 `codex/` 分支保存本次迭代，确保旧版本可回溯。
+6. 不覆盖或删除用户已有修改，不使用 `git reset --hard` 或 `git checkout --` 回退工作区。
 
-1. 推送到 GitHub 仓库。
-2. 新增或更新一份 Markdown 修改说明，记录本次改动内容。
+## 板端验证规则
 
-只要 `main.py` 被修改，这两项都不能省。
+1. 当前以 RK3588 板端结果为准，不以 PC 端推理结果替代板端结论。
+2. 运行板端视频测试前检查并停止自启动服务，避免两套 RKNN 同时占用 NPU：
 
-## 修改说明要求
-
-每次 `main.py` 改动后，Markdown 说明至少要写清楚：
-
-- 修改日期
-- 修改目标
-- 改动了哪些算法逻辑
-- 是否影响帧差、蒙版、ROI、YOLO 推理、轨迹判断、绿框确认逻辑
-- 默认参数是否变化
-- 是否做过本地视频推理验证
-- 已知问题与后续待优化方向
-
-## 说明文件命名
-
-每次更新建议新增独立说明文件，放在 `docs/main_updates/` 目录下：
-
-```text
-docs/main_updates/YYYYMMDD_简短说明.md
+```bash
+sudo systemctl stop python_autostar.service
 ```
 
-示例：
+3. 测试后确认无残留 `main.py` 或 `videomain.py` 进程。
+4. 先运行 5 秒冒烟测试，再运行 20 秒对比测试。
+5. A/B 测试只改变一个变量，并记录 ROI 数、RKNN 推理数、延迟、原始命中和绿框命中。
+6. RKNN 静态输入模型出现 dynamic range 查询警告时可忽略，但其他错误必须记录。
 
-```text
-docs/main_updates/20260616_main_process_default_staggered_dynamic_mask.md
-```
+## 目录约束
 
-## Git 分支与推送要求
+- 数据集处理脚本放入 `tools/datasets/`。
+- 推理、统计和可视化脚本放入 `tools/diagnostics/`。
+- 板端部署脚本放入 `tools/deployment/`。
+- 新生成的视频、CSV 和图片放入 `artifacts/` 的实验子目录。
+- 历史备份放入 `archive/code_backups/`。
+- 板端视频回归入口放入 `apps/video_inference/`，不再放在根目录。
+- 根目录不再新增临时脚本、备份文件或推理产物。
+- 完整目录规范见 `docs/PROJECT_STRUCTURE.md`。
 
-每次修改 `main.py` 后：
+## 本机工具环境
 
-1. 使用新的独立分支提交，不直接覆盖旧分支历史。
-2. 提交内容至少包含：
-   - `main.py`
-   - 本次 Markdown 修改说明
-3. 推送到 GitHub 仓库：
-
-```text
-https://github.com/smallandbigrice/test.git
-```
-
-## 本地 Git 调用要求
-
-以后凡是执行本地 Git 操作，必须先确认 `git` 的真实可执行路径，不能默认认为系统里“装过 Git”就一定能直接调用。
-
-执行前必须先做以下检查：
-
-1. 先运行 `Get-Command git` 检查 `git` 是否在 `PATH` 中。
-2. 如果不在 `PATH` 中，必须继续确认本机真实的 `git.exe` 路径。
-3. 若只能查到 Chocolatey 安装记录，但找不到真实 `git.exe`，则不能视为“本地 Git 可用”。
-
-如果 `git` 不在 `PATH` 中，则后续命令、修改说明中都要明确记录使用的是“绝对路径调用”，避免下次重复踩坑。
-
-当前这台机器已确认可用的本地 Git 路径为：
-
-```text
-C:\Program Files\Git\cmd\git.exe
-```
-
-后续如果 `git` 命令解析异常，优先直接使用这个绝对路径。
-
-## main.py 修改完成的判定
-
-以后 `main.py` 的一次修改，只有在以下条件全部满足后，才算真正完成：
-
-1. 本地代码已改完。
-2. Markdown 修改说明已写完。
-3. 已完成 Git 提交与 GitHub 推送，或者已明确说明本次为什么无法推送。
-
-只做到前两步，不能算完成。
-
-## 视频推理验证原则
-
-进行本地或 PC 端视频推理测试时，默认不直接修改 `main.py`。
-
-视频推理阶段只允许修改：
-
-- 临时测试脚本
-- 推理命令参数
-- 独立实验脚本
-
-只有在视频推理效果确认可用后，才允许把对应逻辑整理后写回 `main.py`。
-
-一旦写回 `main.py`，就必须同步：
-
-1. 新建独立 Git 分支
-2. 记录 Markdown 修改说明
-3. 提交并推送到 GitHub，确保历史可回溯
-
-## 视频推理环境
-
-本机运行 `single_video_main_pt.py` 或其他 PT 视频推理脚本时，默认使用：
-
-- Python: `D:\conda\python.exe`
-
-运行前需要补齐 `PATH`：
-
-- `E:\detect uav\_runtime_dlls`
-- `D:\conda`
-- `D:\conda\Library\bin`
-- `D:\conda\Scripts`
-
-推荐启动方式：
+PC 辅助脚本如确需运行，使用：
 
 ```powershell
-$env:PYTHONNOUSERSITE='0'
-$env:PATH='E:\detect uav\_runtime_dlls;D:\conda;D:\conda\Library\bin;D:\conda\Scripts;' + $env:PATH
-python single_video_main_pt.py ...
+& 'C:\Users\31379\.conda\envs\uav-main-gpu2\python.exe' <script.py>
 ```
 
-说明：
+Git 使用系统已安装版本。执行提交或推送前必须先检查：
 
-- 当前默认 `python` 实际指向 `D:\conda\python.exe`
-- `torch` 位于用户目录 `C:\Users\31379\AppData\Roaming\Python\Python311\site-packages`
-- 如果不补齐上述 DLL 路径，`torch` 可能因 `shm.dll` 或其依赖缺失而无法启动
-- 后续凡是做 PC 端 PT 模型视频推理，优先沿用这套环境配置
+```powershell
+git status --short
+git diff -- main.py
+```

@@ -6,15 +6,29 @@ from rknnlite.api import RKNNLite
 
 
 class YoloRKNN:
-    def __init__(self, model_path, input_size=(640, 640), conf_thres=0.45, nms_thres=0.45):
+    def __init__(
+        self,
+        model_path,
+        input_size=(640, 640),
+        conf_thres=0.45,
+        nms_thres=0.45,
+        core_index=None,
+    ):
         self.input_size = input_size
         self.conf_thres = float(conf_thres)
         self.nms_thres = float(nms_thres)
-        self.core_mask = RKNNLite.NPU_CORE_0_1_2
+        core_masks = {
+            0: RKNNLite.NPU_CORE_0,
+            1: RKNNLite.NPU_CORE_1,
+            2: RKNNLite.NPU_CORE_2,
+        }
+        self.core_mask = core_masks.get(core_index, RKNNLite.NPU_CORE_0_1_2)
+        self.core_index = core_index
         self.debug = os.environ.get("YOLO_RKNN_DEBUG", "0") == "1"
         self.keep_bgr = os.environ.get("YOLO_RKNN_KEEP_BGR", "0") == "1"
         self.float_input = os.environ.get("YOLO_RKNN_FLOAT_INPUT", "0") == "1"
         self._printed_debug = False
+        self._infer_count = 0
 
         # YOLOv5 default anchors, grouped by stride 8/16/32.
         self.anchors = [
@@ -24,7 +38,8 @@ class YoloRKNN:
         ]
 
         self.rknn = RKNNLite()
-        print(f"--> [YoloLib] Loading model: {model_path}", flush=True)
+        core_label = "0+1+2" if core_index is None else str(core_index)
+        print(f"--> [YoloLib] Loading model: {model_path} core={core_label}", flush=True)
         ret = self.rknn.load_rknn(model_path)
         if ret != 0:
             raise RuntimeError(f"Load RKNN failed: {ret}")
@@ -201,10 +216,29 @@ class YoloRKNN:
         for idx, out in enumerate(outputs if outputs is not None else []):
             arr = np.asarray(out)
             info = self._output_info(arr)
+            score_text = "unrecognized"
+            if info is not None:
+                kind, stride, aidx = info
+                if kind == "decoded":
+                    decoded = arr.reshape(-1, 6)
+                else:
+                    decoded = self._decode_branch(arr, self.anchors[aidx], stride)
+                if decoded.size:
+                    candidate_scores = decoded[:, 4] * decoded[:, 5]
+                    top_idx = int(np.argmax(candidate_scores))
+                    score_text = (
+                        f"top_score={float(candidate_scores[top_idx]):.6f} "
+                        f"top_obj={float(decoded[top_idx, 4]):.6f} "
+                        f"top_cls={float(decoded[top_idx, 5]):.6f} "
+                        f"ge_010={int(np.count_nonzero(candidate_scores >= 0.10))} "
+                        f"ge_020={int(np.count_nonzero(candidate_scores >= 0.20))} "
+                        f"ge_030={int(np.count_nonzero(candidate_scores >= 0.30))} "
+                        f"ge_conf={int(np.count_nonzero(candidate_scores >= self.conf_thres))}"
+                    )
             print(
                 f"--> [YoloLib][debug] out{idx} shape={arr.shape} dtype={arr.dtype} "
                 f"min={float(np.min(arr)):.6f} max={float(np.max(arr)):.6f} "
-                f"mean={float(np.mean(arr)):.6f} info={info}",
+                f"mean={float(np.mean(arr)):.6f} info={info} {score_text}",
                 flush=True,
             )
         det_count = 0 if dets is None else len(dets)
@@ -228,7 +262,21 @@ class YoloRKNN:
             img_in = img_in.astype(np.float32) / 255.0
 
         input_data = np.expand_dims(img_in, axis=0)
+        self._infer_count += 1
+        if self.debug and self._infer_count <= 3:
+            print(
+                f"--> [YoloLib][debug] inference #{self._infer_count} start "
+                f"shape={input_data.shape} dtype={input_data.dtype}",
+                flush=True,
+            )
         outputs = self.rknn.inference(inputs=[input_data])
+        if self.debug and self._infer_count <= 3:
+            output_shapes = [np.asarray(out).shape for out in (outputs or [])]
+            print(
+                f"--> [YoloLib][debug] inference #{self._infer_count} returned "
+                f"outputs={output_shapes}",
+                flush=True,
+            )
         dets = self._post_process(outputs)
         self._debug_outputs(input_data, outputs, dets)
         return dets
