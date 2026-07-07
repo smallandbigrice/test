@@ -90,9 +90,9 @@ DEFAULT_CAPTURE_W = 640 if SCENE_IS_NIGHT else 2560
 DEFAULT_CAPTURE_H = 480 if SCENE_IS_NIGHT else 1440
 DEFAULT_DIFF_W = 640 if SCENE_IS_NIGHT else 1920
 DEFAULT_DIFF_H = 480 if SCENE_IS_NIGHT else 1080
-DEFAULT_DIRECT_FULL_FRAME = SCENE_IS_NIGHT
+DEFAULT_DIRECT_FULL_FRAME = False
 DEFAULT_MOTION_ZOOM_CROP_SIZE = 160 if SCENE_IS_NIGHT else 0
-DEFAULT_FULLFRAME_FALLBACK_ONLY = SCENE_IS_NIGHT
+DEFAULT_FULLFRAME_FALLBACK_ONLY = False
 
 
 def parse_env_list(name):
@@ -157,7 +157,7 @@ YOLO_CONF_OVERRIDE = float(YOLO_CONF_OVERRIDE) if YOLO_CONF_OVERRIDE else None
 CAM_LAYER_MODE_SPECS = parse_env_list("UAV_CAM_LAYER_MODES")
 ENABLE_AUTO_CAM_LAYER = os.environ.get("UAV_AUTO_CAM_LAYER", "1").strip().lower() not in ("0", "false", "no")
 ENABLE_TRAJECTORY_TRACKING = True
-ENABLE_TRACK_SEARCH_ROIS = _env_bool("UAV_TRACK_SEARCH_ROIS", SCENE_IS_NIGHT)
+ENABLE_TRACK_SEARCH_ROIS = _env_bool("UAV_TRACK_SEARCH_ROIS", False)
 TRACK_SEARCH_MIN_YOLO_HITS = 2
 TRACK_SEARCH_MIN_RECENT_HITS = 2
 TRACK_SEARCH_MIN_SCORE = 0.32
@@ -215,6 +215,7 @@ ENABLE_FRAME_DIFF_ROIS = True
 DIRECT_FULL_FRAME_INFERENCE = _env_bool("UAV_DIRECT_FULL_FRAME_INFERENCE", DEFAULT_DIRECT_FULL_FRAME)
 MOTION_ZOOM_CROP_SIZE = max(0, int(os.environ.get("UAV_MOTION_ZOOM_CROP_SIZE", str(DEFAULT_MOTION_ZOOM_CROP_SIZE))))
 MOTION_ZOOM_MAX_ROIS = max(0, int(os.environ.get("UAV_MOTION_ZOOM_MAX_ROIS", "1")))
+MOTION_ZOOM_ONLY = _env_bool("UAV_MOTION_ZOOM_ONLY", SCENE_IS_NIGHT)
 TRACK_ZOOM_CROP_SIZE = max(0, int(os.environ.get("UAV_TRACK_ZOOM_CROP_SIZE", str(MOTION_ZOOM_CROP_SIZE))))
 FULLFRAME_FALLBACK_ONLY = _env_bool("UAV_FULLFRAME_FALLBACK_ONLY", DEFAULT_FULLFRAME_FALLBACK_ONLY)
 DIFF_THRESH = 4 if HIGH_LAYER_MODE else 8
@@ -1713,6 +1714,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         f"fixed_stride={PROCESS_EVERY_N_FRAMES} serialized=yes "
         f"direct_fullframe={'yes' if DIRECT_FULL_FRAME_INFERENCE else 'no'} "
         f"zoom={MOTION_ZOOM_CROP_SIZE}x{MOTION_ZOOM_MAX_ROIS} "
+        f"zoom_only={'yes' if MOTION_ZOOM_ONLY else 'no'} "
         f"fullframe_fallback_only={'yes' if FULLFRAME_FALLBACK_ONLY else 'no'}",
         flush=True,
     )
@@ -2052,7 +2054,12 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                 rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                 rois = prioritize_diverse_rois(rois, W, H)
 
-            if DIRECT_FULL_FRAME_INFERENCE:
+            if MOTION_ZOOM_ONLY:
+                zoom_rois = [r for r in rois if roi_is_zoom_crop(r)]
+                zoom_rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
+                rois = zoom_rois[:MOTION_ZOOM_MAX_ROIS]
+                track_roi_keys.clear()
+            elif DIRECT_FULL_FRAME_INFERENCE:
                 zoom_rois = [r for r in rois if roi_is_zoom_crop(r)]
                 zoom_rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                 selected_zoom = zoom_rois[:MOTION_ZOOM_MAX_ROIS]
@@ -2286,6 +2293,7 @@ if __name__ == '__main__':
         f"capture={CAPTURE_W}x{CAPTURE_H} diff={DIFF_W}x{DIFF_H} "
         f"direct_fullframe={'yes' if DIRECT_FULL_FRAME_INFERENCE else 'no'} "
         f"motion_zoom={MOTION_ZOOM_CROP_SIZE} "
+        f"motion_zoom_only={'yes' if MOTION_ZOOM_ONLY else 'no'} "
         f"track_zoom={TRACK_ZOOM_CROP_SIZE} "
         f"fallback_only={'yes' if FULLFRAME_FALLBACK_ONLY else 'no'}",
         flush=True,
