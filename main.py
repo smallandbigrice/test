@@ -34,8 +34,8 @@ except Exception:
 # ==========================================
 # 1
 # ==========================================
-ALGORITHM_VERSION = "frame-diff-rknn-static-confirm-lowmotion-20260707"
-ALGORITHM_NOTE = "Frame-diff RKNN detector with high-layer gray seed ROIs, visual lock, hover recheck, and low-motion static confirmation."
+ALGORITHM_VERSION = "frame-diff-rknn-static-confirm-lowlayer-restore-20260709"
+ALGORITHM_NOTE = "Frame-diff RKNN detector with static hover confirmation and restored low-layer ROI scheduling."
 N_CAM = max(1, int(os.environ.get("UAV_VIDEO_CAM_COUNT", "5")))
 INIT_TIME = 5
 VIDEO_TEST_PATH = os.environ.get("UAV_VIDEO_PATH", "./4.mp4")
@@ -66,7 +66,9 @@ def _env_bool(name, default=False):
     return raw.strip().lower() not in ("0", "false", "no", "off")
 
 
-ENABLE_GRU_GRAY_SEED_ROIS = _env_bool("UAV_GRU_GRAY_SEED_ROIS", True)
+_EARLY_SCENE_MODE = os.environ.get("UAV_SCENE_MODE", os.environ.get("UAV_DAY_NIGHT_MODE", "day")).strip().lower()
+_EARLY_SCENE_IS_NIGHT = _EARLY_SCENE_MODE in {"night", "n", "nighttime", "dark"}
+ENABLE_GRU_GRAY_SEED_ROIS = _env_bool("UAV_GRU_GRAY_SEED_ROIS", _EARLY_SCENE_IS_NIGHT)
 GRU_GRAY_SEED_THRESH = max(1, int(os.environ.get("UAV_GRU_GRAY_SEED_THRESH", "120")))
 GRU_GRAY_SEED_RELAXED_THRESH = max(GRU_GRAY_SEED_THRESH, int(os.environ.get("UAV_GRU_GRAY_SEED_RELAXED_THRESH", "130")))
 GRU_GRAY_SEED_MIN_AREA = max(1, int(os.environ.get("UAV_GRU_GRAY_SEED_MIN_AREA", "1")))
@@ -77,6 +79,24 @@ GRU_GRAY_SEED_MAX_NEIGHBORS = max(0, int(os.environ.get("UAV_GRU_GRAY_SEED_MAX_N
 GRU_GRAY_SEED_SKY_Y_RATIO = min(1.0, max(0.0, float(os.environ.get("UAV_GRU_GRAY_SEED_SKY_Y_RATIO", "0.88"))))
 GRU_GRAY_SEED_MAX_ROIS = max(0, int(os.environ.get("UAV_GRU_GRAY_SEED_MAX_ROIS", "4")))
 GRU_GRAY_SEED_SCORE_BONUS = float(os.environ.get("UAV_GRU_GRAY_SEED_SCORE_BONUS", "35.0"))
+
+ENABLE_NIGHT_STATIC_POINT_SUPPRESS = _env_bool(
+    "UAV_NIGHT_STATIC_POINT_SUPPRESS",
+    os.environ.get("UAV_SCENE_MODE", os.environ.get("UAV_DAY_NIGHT_MODE", "day")).strip().lower()
+    in {"night", "n", "nighttime", "dark"},
+)
+NIGHT_STATIC_POINT_DARK_THRESH = max(0, min(255, int(os.environ.get("UAV_NIGHT_STATIC_POINT_DARK_THRESH", "85"))))
+NIGHT_STATIC_POINT_BRIGHT_THRESH = max(0, min(255, int(os.environ.get("UAV_NIGHT_STATIC_POINT_BRIGHT_THRESH", "190"))))
+NIGHT_STATIC_POINT_MAX_QRANGE = max(0, int(os.environ.get("UAV_NIGHT_STATIC_POINT_MAX_QRANGE", "35")))
+NIGHT_STATIC_POINT_LOCAL_CONTRAST = max(0, int(os.environ.get("UAV_NIGHT_STATIC_POINT_LOCAL_CONTRAST", "18")))
+NIGHT_STATIC_POINT_LOCAL_KERNEL = max(3, int(os.environ.get("UAV_NIGHT_STATIC_POINT_LOCAL_KERNEL", "21")))
+if NIGHT_STATIC_POINT_LOCAL_KERNEL % 2 == 0:
+    NIGHT_STATIC_POINT_LOCAL_KERNEL += 1
+NIGHT_STATIC_POINT_QRANGE_OUTLIER = max(0, int(os.environ.get("UAV_NIGHT_STATIC_POINT_QRANGE_OUTLIER", "12")))
+NIGHT_STATIC_POINT_MAX_AREA = max(1, int(os.environ.get("UAV_NIGHT_STATIC_POINT_MAX_AREA", "36")))
+NIGHT_STATIC_POINT_MAX_SIDE = max(1, int(os.environ.get("UAV_NIGHT_STATIC_POINT_MAX_SIDE", "12")))
+NIGHT_STATIC_POINT_PAD = max(0, int(os.environ.get("UAV_NIGHT_STATIC_POINT_PAD", "10")))
+NIGHT_STATIC_POINT_CENTER_RADIUS = max(1, int(os.environ.get("UAV_NIGHT_STATIC_POINT_CENTER_RADIUS", "4")))
 
 ENABLE_VISUAL_LOCK = _env_bool("UAV_VISUAL_LOCK", True)
 VISUAL_LOCK_EVERY_N_FRAMES = max(1, int(os.environ.get("UAV_VISUAL_LOCK_EVERY_N_FRAMES", "3")))
@@ -143,6 +163,10 @@ STATIC_CONFIRM_MAX_SPEED_PX_PER_FRAME = max(0.1, float(os.environ.get("UAV_STATI
 STATIC_CONFIRM_MAX_RECENT_NET_MOTION_PX = max(1.0, float(os.environ.get("UAV_STATIC_CONFIRM_MAX_RECENT_NET_MOTION_PX", "24.0")))
 STATIC_CONFIRM_MAX_BG_RISK = min(1.0, max(0.0, float(os.environ.get("UAV_STATIC_CONFIRM_MAX_BG_RISK", "0.70"))))
 STATIC_CONFIRM_MIN_SEED_ALIGNMENT = min(1.0, max(0.0, float(os.environ.get("UAV_STATIC_CONFIRM_MIN_SEED_ALIGNMENT", "0.25"))))
+STATIC_CONFIRM_MAX_YOLO_GAP_FRAMES = max(
+    HOVER_RECHECK_INTERVAL_FRAMES,
+    int(os.environ.get("UAV_STATIC_CONFIRM_MAX_YOLO_GAP_FRAMES", str(HOVER_MAX_YOLO_GAP_FRAMES))),
+)
 
 
 def _env_choice(name, default, choices, aliases=None):
@@ -246,7 +270,7 @@ YOLO_DIRECT_CONFIRM_RECENT_HITS = 3
 YOLO_DIRECT_CONFIRM_SCORE = 0.40
 YOLO_DIRECT_CONFIRM_MAX_MISSES = 0
 YOLO_TRACK_MAX_CONFIRMED_MISSES = 2
-YOLO_TRACK_MAX_SEARCH_MISSES = 8
+YOLO_TRACK_MAX_SEARCH_MISSES = max(1, int(os.environ.get("UAV_TRACK_MAX_SEARCH_MISSES", "8")))
 TRACK_SEARCH_PREDICT_MAX_MISSES = 2
 MISS_VELOCITY_DECAY = 0.55
 MAX_TRACK_ROIS_PER_FRAME = 3
@@ -260,7 +284,7 @@ VIDEO_STREAM_W = max(1, int(os.environ.get("UAV_VIDEO_STREAM_W", "320")))
 VIDEO_STREAM_H = max(1, int(os.environ.get("UAV_VIDEO_STREAM_H", "180")))
 VIDEO_STREAM_QUALITY = max(5, min(95, int(os.environ.get("UAV_VIDEO_JPEG_QUALITY", "35"))))
 VIDEO_STREAM_CAM_SPECS = parse_env_list("UAV_VIDEO_STREAM_CAMS")
-MAX_DRAW_BOXES = 80
+MAX_DRAW_BOXES = max(1, int(os.environ.get("UAV_MAX_DRAW_BOXES", "32")))
 CAPTURE_W = max(320, int(os.environ.get("UAV_CAPTURE_W", str(DEFAULT_CAPTURE_W))))
 CAPTURE_H = max(240, int(os.environ.get("UAV_CAPTURE_H", str(DEFAULT_CAPTURE_H))))
 
@@ -286,6 +310,29 @@ CAM_LAYER_MODE_SPECS = parse_env_list("UAV_CAM_LAYER_MODES")
 ENABLE_AUTO_CAM_LAYER = os.environ.get("UAV_AUTO_CAM_LAYER", "1").strip().lower() not in ("0", "false", "no")
 ENABLE_TRAJECTORY_TRACKING = True
 ENABLE_TRACK_SEARCH_ROIS = _env_bool("UAV_TRACK_SEARCH_ROIS", False)
+ENABLE_EDGE_REGION_LAYER = _env_bool(
+    "UAV_EDGE_REGION_LAYER",
+    SCENE_MODE == "day" and not SCENE_IS_NIGHT and LAYER_MODE == "auto",
+)
+EDGE_REGION_UPDATE_FRAMES = max(1, int(os.environ.get("UAV_EDGE_REGION_UPDATE_FRAMES", "30")))
+EDGE_REGION_CANNY_LOW = max(1, int(os.environ.get("UAV_EDGE_REGION_CANNY_LOW", "45")))
+EDGE_REGION_CANNY_HIGH = max(EDGE_REGION_CANNY_LOW + 1, int(os.environ.get("UAV_EDGE_REGION_CANNY_HIGH", "120")))
+EDGE_REGION_DENSITY_KERNEL = max(7, int(os.environ.get("UAV_EDGE_REGION_DENSITY_KERNEL", "31")))
+if EDGE_REGION_DENSITY_KERNEL % 2 == 0:
+    EDGE_REGION_DENSITY_KERNEL += 1
+EDGE_REGION_DENSITY_THRESH = float(os.environ.get("UAV_EDGE_REGION_DENSITY_THRESH", "0.055"))
+EDGE_REGION_MIN_AREA = max(1, int(os.environ.get("UAV_EDGE_REGION_MIN_AREA", "1000")))
+EDGE_REGION_KEEP_Y_RATIO = float(os.environ.get("UAV_EDGE_REGION_KEEP_Y_RATIO", "0.18"))
+EDGE_REGION_ROI_SUPPORT_RADIUS = max(4, int(os.environ.get("UAV_EDGE_REGION_ROI_SUPPORT_RADIUS", "32")))
+EDGE_REGION_LOW_SCORE_BOOST = float(os.environ.get("UAV_EDGE_REGION_LOW_SCORE_BOOST", "0.0"))
+EDGE_REGION_CLOSE_SIZE = max(3, int(os.environ.get("UAV_EDGE_REGION_CLOSE_SIZE", "9")))
+if EDGE_REGION_CLOSE_SIZE % 2 == 0:
+    EDGE_REGION_CLOSE_SIZE += 1
+EDGE_REGION_DILATE_SIZE = max(3, int(os.environ.get("UAV_EDGE_REGION_DILATE_SIZE", "17")))
+if EDGE_REGION_DILATE_SIZE % 2 == 0:
+    EDGE_REGION_DILATE_SIZE += 1
+EDGE_REGION_CLOSE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (EDGE_REGION_CLOSE_SIZE, EDGE_REGION_CLOSE_SIZE))
+EDGE_REGION_DILATE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (EDGE_REGION_DILATE_SIZE, EDGE_REGION_DILATE_SIZE))
 TRACK_SEARCH_MIN_YOLO_HITS = 2
 TRACK_SEARCH_MIN_RECENT_HITS = 2
 TRACK_SEARCH_MIN_SCORE = 0.32
@@ -306,6 +353,14 @@ MAX_INFERENCE_RESULT_AGE_FRAMES = max(
 RESULT_GROUP_WAIT_SEC = max(0.05, float(os.environ.get("UAV_RESULT_GROUP_WAIT_SEC", "0.35")))
 TRACK_LIVE_MAX_AGE_FRAMES = MAX_INFERENCE_RESULT_AGE_FRAMES
 TRACK_SEARCH_MAX_AGE_FRAMES = PROCESS_EVERY_N_FRAMES * 3
+STATIC_CONFIRM_KEEP_MISSES = max(
+    STATIC_CONFIRM_MAX_MISSES,
+    int(os.environ.get("UAV_STATIC_CONFIRM_KEEP_MISSES", str(max(8, HOVER_MAX_RECHECK_MISSES * 2)))),
+)
+STATIC_CONFIRM_MAX_AGE_FRAMES = max(
+    TRACK_SEARCH_MAX_AGE_FRAMES,
+    int(os.environ.get("UAV_STATIC_CONFIRM_MAX_AGE_FRAMES", str(STATIC_CONFIRM_MAX_YOLO_GAP_FRAMES))),
+)
 HIGH_TRACK_SEARCH_MAX_AGE_FRAMES = max(
     TRACK_SEARCH_MAX_AGE_FRAMES,
     int(os.environ.get("UAV_HIGH_TRACK_SEARCH_MAX_AGE_FRAMES", str(PROCESS_EVERY_N_FRAMES * 12))),
@@ -340,6 +395,12 @@ DEFAULT_STATIC_BG_SECONDS = 10.0 if HIGH_LAYER_MODE else 30.0
 STATIC_BG_SECONDS = max(
     1.0,
     float(os.environ.get("UAV_STATIC_BG_SECONDS", str(DEFAULT_STATIC_BG_SECONDS))),
+)
+VIDEO_FORCE_LOW_BG_30 = _env_bool("UAV_VIDEO_FORCE_LOW_BG_30", True)
+DEFAULT_ONLINE_AUTO_BG_SECONDS = 30.0 if (SCENE_MODE == "day" and LAYER_MODE == "auto") else 0.0
+ONLINE_AUTO_BG_SECONDS = max(
+    0.0,
+    float(os.environ.get("UAV_ONLINE_AUTO_BG_SECONDS", str(DEFAULT_ONLINE_AUTO_BG_SECONDS))),
 )
 ENABLE_FRAME_DIFF_ROIS = True
 DIRECT_FULL_FRAME_INFERENCE = _env_bool("UAV_DIRECT_FULL_FRAME_INFERENCE", DEFAULT_DIRECT_FULL_FRAME)
@@ -377,6 +438,9 @@ LCM_SCORE_WEIGHT = 3.0
 MOTION_ERODE_ITER = 0
 MOTION_DILATE_ITER = 1
 MOTION_CLOSE_ITER = 1
+LOW_LAYER_MOTION_ERODE_ITER = max(0, int(os.environ.get("UAV_LOW_MOTION_ERODE_ITER", str(MOTION_ERODE_ITER))))
+LOW_LAYER_MOTION_DILATE_ITER = max(0, int(os.environ.get("UAV_LOW_MOTION_DILATE_ITER", str(MOTION_DILATE_ITER))))
+LOW_LAYER_MOTION_CLOSE_ITER = max(0, int(os.environ.get("UAV_LOW_MOTION_CLOSE_ITER", str(MOTION_CLOSE_ITER))))
 ENABLE_MOTION_OPENING = True
 MOTION_OPEN_ITER = 0
 MOTION_OPEN_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -386,7 +450,7 @@ MOTION_CLOSE_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 STATIC_BG_OPEN_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
 STATIC_BG_DILATE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 MAX_ROIS_PER_FRAME = 6
-MAX_ENQUEUED_ROIS_PER_UPDATE = max(1, int(os.environ.get("UAV_MAX_ROIS_PER_UPDATE", "4")))
+MAX_ENQUEUED_ROIS_PER_UPDATE = max(1, int(os.environ.get("UAV_MAX_ROIS_PER_UPDATE", "6")))
 NPU_TASK_MAX_AGE_SEC = max(0.05, float(os.environ.get("UAV_NPU_TASK_MAX_AGE_SEC", "0.40")))
 DEFAULT_NPU_WORKER_COUNT = 1 if N_CAM <= 2 else 3
 NPU_WORKER_COUNT = min(
@@ -401,7 +465,10 @@ NPU_REPLACE_PENDING_ON_UPDATE = os.environ.get("UAV_REPLACE_PENDING", "1").strip
 ENABLE_ROI_GRID_QUOTA = True
 ROI_GRID_COLS = max(1, int(os.environ.get("UAV_ROI_GRID_COLS", "5")))
 ROI_GRID_ROWS = max(1, int(os.environ.get("UAV_ROI_GRID_ROWS", "4")))
-ROI_GRID_MAX_PER_CELL = max(1, int(os.environ.get("UAV_ROI_GRID_MAX_PER_CELL", "1")))
+ROI_GRID_MAX_PER_CELL = max(1, int(os.environ.get("UAV_ROI_GRID_MAX_PER_CELL", "2")))
+ENABLE_ROI_OVERLAP_SUPPRESS = _env_bool("UAV_ROI_OVERLAP_SUPPRESS", False)
+ROI_OVERLAP_IOU_THRESH = float(os.environ.get("UAV_ROI_OVERLAP_IOU_THRESH", "0.28"))
+ROI_OVERLAP_COVER_THRESH = float(os.environ.get("UAV_ROI_OVERLAP_COVER_THRESH", "0.60"))
 INF_QUEUE_SIZE = MAX_ENQUEUED_ROIS_PER_UPDATE
 RES_QUEUE_SIZE = MAX_ROIS_PER_FRAME + 4
 DIFF_W = max(320, int(os.environ.get("UAV_DIFF_W", str(DEFAULT_DIFF_W))))
@@ -468,7 +535,7 @@ ROUGH_TARGET_WIDTH_M = 0.5
 CAM_H_FOV = 17.5
 IMG_W, IMG_H = CAPTURE_W, CAPTURE_H
 HIGH_LAYER_MIN_DIFF_AREA = 3
-LOW_LAYER_MIN_DIFF_AREA = 11
+LOW_LAYER_MIN_DIFF_AREA = max(1, int(os.environ.get("UAV_LOW_MIN_DIFF_AREA", "15")))
 MIN_DIFF_AREA = (HIGH_LAYER_MIN_DIFF_AREA if HIGH_LAYER_MODE else LOW_LAYER_MIN_DIFF_AREA) if ENABLE_FRAME_DIFF_ROIS else 0
 FAR_MIN_COMPACTNESS = 0.0 if HIGH_LAYER_MODE else 0.18
 
@@ -516,6 +583,9 @@ def make_layer_profile(high, reason="global", day_scene=None, layer_confidence=0
         "enable_vertical_strip_filter": False if high else ENABLE_VERTICAL_STRIP_FILTER,
         "enable_gray_noise_suppressor": False,
         "roi_grid_max_per_cell": ROI_GRID_MAX_PER_CELL,
+        "motion_erode_iter": MOTION_ERODE_ITER if high else LOW_LAYER_MOTION_ERODE_ITER,
+        "motion_dilate_iter": MOTION_DILATE_ITER if high else LOW_LAYER_MOTION_DILATE_ITER,
+        "motion_close_iter": MOTION_CLOSE_ITER if high else LOW_LAYER_MOTION_CLOSE_ITER,
         "max_local_gray_std": 38.0 if high else 30.0,
         "bright_spot_max_area": 220 if high else 140,
         "max_diff_area": 1000 if high else 600,
@@ -533,6 +603,13 @@ def make_layer_profile(high, reason="global", day_scene=None, layer_confidence=0
         "min_diff_area": (HIGH_LAYER_MIN_DIFF_AREA if high else LOW_LAYER_MIN_DIFF_AREA) if ENABLE_FRAME_DIFF_ROIS else 0,
         "far_min_compactness": 0.0 if high else 0.18,
     }
+
+
+def online_static_bg_seconds(profile):
+    seconds = float(profile.get("static_bg_seconds", STATIC_BG_SECONDS))
+    if SCENE_MODE == "day" and LAYER_MODE == "auto" and ENABLE_AUTO_CAM_LAYER:
+        seconds = max(seconds, ONLINE_AUTO_BG_SECONDS)
+    return max(1.0, seconds)
 
 
 def build_background_risk_model(bg_qrange):
@@ -612,6 +689,79 @@ def get_cam_layer_profile(cam_idx):
     return DEFAULT_LAYER_PROFILE
 
 
+def roi_layer_name(roi, default_name=None):
+    if roi and isinstance(roi[-1], str) and roi[-1] in ("high", "low"):
+        return roi[-1]
+    return default_name or current_layer_profile().get("name", "high")
+
+
+def tag_roi_layer(roi, layer_name):
+    if roi and isinstance(roi[-1], str) and roi[-1] in ("high", "low"):
+        return roi
+    return tuple(list(roi) + [str(layer_name)])
+
+
+def add_roi_score(roi, delta):
+    if not roi or len(roi) <= 4:
+        return roi
+    vals = list(roi)
+    vals[4] = float(vals[4]) + float(delta)
+    return tuple(vals)
+
+
+def roi_has_region_support(roi, region_mask, full_w, full_h):
+    if region_mask is None or region_mask.size == 0 or cv2.countNonZero(region_mask) <= 0:
+        return False
+    mh, mw = region_mask.shape[:2]
+    sx = mw / float(max(1, full_w))
+    sy = mh / float(max(1, full_h))
+    seed_x, seed_y = roi_seed_center(roi)
+    radius_x = max(1, int(round(EDGE_REGION_ROI_SUPPORT_RADIUS * sx)))
+    radius_y = max(1, int(round(EDGE_REGION_ROI_SUPPORT_RADIUS * sy)))
+    mx = int(round(seed_x * sx))
+    my = int(round(seed_y * sy))
+    x1 = max(0, mx - radius_x)
+    y1 = max(0, my - radius_y)
+    x2 = min(mw, mx + radius_x + 1)
+    y2 = min(mh, my + radius_y + 1)
+    return x2 > x1 and y2 > y1 and cv2.countNonZero(region_mask[y1:y2, x1:x2]) > 0
+
+
+def edge_region_profiles():
+    high_profile = make_layer_profile(True, "edge-region:sky-high", day_scene=SCENE_MODE == "day", layer_confidence=1.0)
+    low_profile = make_layer_profile(False, "edge-region:edge-low", day_scene=SCENE_MODE == "day", layer_confidence=1.0)
+    return high_profile, low_profile
+
+
+def build_edge_low_region_mask(gray, bg_gray=None):
+    if not ENABLE_EDGE_REGION_LAYER:
+        return None
+    src = bg_gray if bg_gray is not None and bg_gray.shape == gray.shape else gray
+    if src is None or src.size == 0:
+        return None
+    h, _w = src.shape[:2]
+    blur = cv2.GaussianBlur(src, (5, 5), 0)
+    edges = cv2.Canny(blur, EDGE_REGION_CANNY_LOW, EDGE_REGION_CANNY_HIGH)
+    density = cv2.blur(
+        (edges > 0).astype(np.float32),
+        (EDGE_REGION_DENSITY_KERNEL, EDGE_REGION_DENSITY_KERNEL),
+    )
+    dense = (density >= EDGE_REGION_DENSITY_THRESH).astype(np.uint8) * 255
+    dense = cv2.morphologyEx(dense, cv2.MORPH_CLOSE, EDGE_REGION_CLOSE_KERNEL, iterations=1)
+    dense = cv2.dilate(dense, EDGE_REGION_DILATE_KERNEL, iterations=1)
+    cnts, _ = cv2.findContours(dense, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    low_mask = np.zeros_like(dense)
+    min_keep_y = int(max(0.0, min(0.95, EDGE_REGION_KEEP_Y_RATIO)) * h)
+    for c in cnts:
+        if int(cv2.contourArea(c)) < EDGE_REGION_MIN_AREA:
+            continue
+        _x, y, _cw, ch = cv2.boundingRect(c)
+        if y + ch < min_keep_y:
+            continue
+        cv2.drawContours(low_mask, [c], -1, 255, thickness=cv2.FILLED)
+    return low_mask if cv2.countNonZero(low_mask) > 0 else None
+
+
 def estimate_low_layer_scene(bg_qrange):
     if bg_qrange is None or getattr(bg_qrange, "ndim", 0) != 2 or bg_qrange.size == 0:
         return False, 0.0, "no_qrange"
@@ -659,30 +809,33 @@ def estimate_layer_from_background(bg_gray, bg_qrange):
     return (not is_low), reason, day_scene, layer_confidence
 
 
+def make_cam_profile_from_background(cam_idx, bg_gray, bg_qrange):
+    spec = CAM_LAYER_MODE_SPECS[min(cam_idx, len(CAM_LAYER_MODE_SPECS) - 1)].lower() if CAM_LAYER_MODE_SPECS else ""
+    auto_high, auto_reason, day_scene, layer_confidence = estimate_layer_from_background(bg_gray, bg_qrange)
+    if spec in ("high", "h"):
+        high, reason = True, f"debug-override:high; {auto_reason}"
+    elif spec in ("low", "l"):
+        high, reason = False, f"debug-override:low; {auto_reason}"
+    elif ENABLE_EDGE_REGION_LAYER:
+        high, reason = True, f"edge-region:base-high; {auto_reason}"
+    elif spec in ("auto", "a") or ENABLE_AUTO_CAM_LAYER:
+        high, reason = auto_high, auto_reason
+    else:
+        high, reason = HIGH_LAYER_MODE, f"debug-global:{LAYER_MODE}; {auto_reason}"
+    return make_layer_profile(
+        high,
+        reason,
+        day_scene=day_scene,
+        layer_confidence=layer_confidence,
+    )
+
+
 def build_cam_layer_profiles(initial_backgrounds):
     profiles = []
     for cam_idx in range(N_CAM):
-        spec = CAM_LAYER_MODE_SPECS[min(cam_idx, len(CAM_LAYER_MODE_SPECS) - 1)].lower() if CAM_LAYER_MODE_SPECS else ""
         bg_gray = initial_backgrounds[cam_idx][0] if cam_idx < len(initial_backgrounds) else None
         bg_qrange = initial_backgrounds[cam_idx][2] if cam_idx < len(initial_backgrounds) else None
-        if spec in ("high", "h"):
-            _auto_high, _auto_reason, day_scene, layer_confidence = estimate_layer_from_background(bg_gray, bg_qrange)
-            high, reason = True, f"debug-override:high; {_auto_reason}"
-        elif spec in ("low", "l"):
-            _auto_high, _auto_reason, day_scene, layer_confidence = estimate_layer_from_background(bg_gray, bg_qrange)
-            high, reason = False, f"debug-override:low; {_auto_reason}"
-        elif spec in ("auto", "a") or ENABLE_AUTO_CAM_LAYER:
-            high, reason, day_scene, layer_confidence = estimate_layer_from_background(bg_gray, bg_qrange)
-        else:
-            high, reason = HIGH_LAYER_MODE, f"debug-global:{LAYER_MODE}"
-            day_scene = estimate_day_scene_from_bg(bg_gray)[0]
-            _is_low, layer_confidence, _ = estimate_low_layer_scene(bg_qrange)
-        profiles.append(make_layer_profile(
-            high,
-            reason,
-            day_scene=day_scene,
-            layer_confidence=layer_confidence,
-        ))
+        profiles.append(make_cam_profile_from_background(cam_idx, bg_gray, bg_qrange))
     return profiles
 
 # ==========================================
@@ -770,6 +923,52 @@ def merge_nearby_boxes(boxes, dist_thresh=120):
         if not is_dup: merged.append(box)
     return merged
 
+def roi_suppress_key(roi):
+    if len(roi) >= 10 and roi[9] == "zoom":
+        return "zoom"
+    if len(roi) >= 9:
+        return "padded"
+    return "native"
+
+def box_overlap_metrics(a, b):
+    ax1, ay1, ax2, ay2 = [float(v) for v in a[:4]]
+    bx1, by1, bx2, by2 = [float(v) for v in b[:4]]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0.0:
+        return 0.0, 0.0
+    area_a = max(1.0, (ax2 - ax1) * (ay2 - ay1))
+    area_b = max(1.0, (bx2 - bx1) * (by2 - by1))
+    union = max(1.0, area_a + area_b - inter)
+    iou = inter / union
+    cover = inter / max(1.0, min(area_a, area_b))
+    return iou, cover
+
+def suppress_overlapping_rois(
+    rois,
+    iou_thresh=ROI_OVERLAP_IOU_THRESH,
+    cover_thresh=ROI_OVERLAP_COVER_THRESH,
+):
+    if not ENABLE_ROI_OVERLAP_SUPPRESS or not rois:
+        return rois
+    selected = []
+    sorted_rois = sorted(rois, key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
+    for roi in sorted_rois:
+        key = roi_suppress_key(roi)
+        duplicate = False
+        for kept in selected:
+            if key != roi_suppress_key(kept):
+                continue
+            iou, cover = box_overlap_metrics(roi, kept)
+            if iou >= iou_thresh or cover >= cover_thresh:
+                duplicate = True
+                break
+        if not duplicate:
+            selected.append(roi)
+    return selected
+
 def build_static_bg_model(samples):
     if not samples:
         return None, None, None
@@ -806,6 +1005,118 @@ def build_static_bg_model(samples):
     return bg, tol, qrange_u8
 
 
+def night_static_point_suppress_enabled(profile):
+    return bool(
+        ENABLE_NIGHT_STATIC_POINT_SUPPRESS
+        and SCENE_IS_NIGHT
+        and (profile or {}).get("high", False)
+    )
+
+
+def build_night_static_point_mask(bg_gray, bg_qrange, profile):
+    if not night_static_point_suppress_enabled(profile) or bg_gray is None:
+        return None
+    if len(bg_gray.shape) != 2:
+        bg_gray = frame_to_gray(bg_gray)
+    if bg_gray is None or bg_gray.size == 0:
+        return None
+
+    dark = bg_gray <= NIGHT_STATIC_POINT_DARK_THRESH
+    bright = bg_gray >= NIGHT_STATIC_POINT_BRIGHT_THRESH
+    candidate = np.logical_or(dark, bright)
+    local_delta = None
+    if NIGHT_STATIC_POINT_LOCAL_CONTRAST > 0:
+        local_bg = cv2.medianBlur(bg_gray, NIGHT_STATIC_POINT_LOCAL_KERNEL)
+        local_delta = cv2.absdiff(bg_gray, local_bg)
+        candidate = np.logical_or(candidate, local_delta >= NIGHT_STATIC_POINT_LOCAL_CONTRAST)
+    qrange_outlier = None
+    if bg_qrange is not None:
+        if bg_qrange.shape[:2] != bg_gray.shape[:2]:
+            bg_qrange = cv2.resize(bg_qrange, (bg_gray.shape[1], bg_gray.shape[0]), interpolation=cv2.INTER_NEAREST)
+        if NIGHT_STATIC_POINT_QRANGE_OUTLIER > 0:
+            q_local = cv2.medianBlur(bg_qrange, NIGHT_STATIC_POINT_LOCAL_KERNEL)
+            q_delta = cv2.subtract(bg_qrange, q_local)
+            qrange_outlier = q_delta >= NIGHT_STATIC_POINT_QRANGE_OUTLIER
+            candidate = np.logical_or(candidate, qrange_outlier)
+        stable = bg_qrange <= NIGHT_STATIC_POINT_MAX_QRANGE
+        if local_delta is not None and NIGHT_STATIC_POINT_LOCAL_CONTRAST > 0:
+            strong_local = local_delta >= max(
+                NIGHT_STATIC_POINT_LOCAL_CONTRAST + 8,
+                int(round(NIGHT_STATIC_POINT_LOCAL_CONTRAST * 1.5)),
+            )
+            stable = np.logical_or(stable, strong_local)
+        if qrange_outlier is not None:
+            stable = np.logical_or(stable, qrange_outlier)
+        candidate = np.logical_and(candidate, stable)
+
+    base_mask = candidate.astype(np.uint8) * 255
+    cnts, _ = cv2.findContours(base_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    point_mask = np.zeros(bg_gray.shape[:2], dtype=np.uint8)
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w <= 0 or h <= 0:
+            continue
+        area = int(cv2.countNonZero(base_mask[y:y + h, x:x + w]))
+        if area > NIGHT_STATIC_POINT_MAX_AREA:
+            continue
+        if max(w, h) > NIGHT_STATIC_POINT_MAX_SIDE:
+            continue
+        cv2.drawContours(point_mask, [c], -1, 255, thickness=-1)
+
+    if NIGHT_STATIC_POINT_PAD > 0 and cv2.countNonZero(point_mask) > 0:
+        k = 2 * NIGHT_STATIC_POINT_PAD + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        point_mask = cv2.dilate(point_mask, kernel, iterations=1)
+    return point_mask if cv2.countNonZero(point_mask) > 0 else None
+
+
+def night_static_point_hit(mask, cx, cy, full_w, full_h, radius=NIGHT_STATIC_POINT_CENTER_RADIUS):
+    if mask is None or full_w <= 0 or full_h <= 0:
+        return False
+    mh, mw = mask.shape[:2]
+    mx = int(round(float(cx) * mw / float(full_w)))
+    my = int(round(float(cy) * mh / float(full_h)))
+    mx1 = max(0, mx - radius)
+    my1 = max(0, my - radius)
+    mx2 = min(mw, mx + radius + 1)
+    my2 = min(mh, my + radius + 1)
+    if mx2 <= mx1 or my2 <= my1:
+        return False
+    return cv2.countNonZero(mask[my1:my2, mx1:mx2]) > 0
+
+
+def filter_night_static_point_rois(rois, point_mask, full_w, full_h, profile):
+    if not night_static_point_suppress_enabled(profile) or point_mask is None or not rois:
+        return rois
+    kept = []
+    for roi in rois:
+        cx, cy = roi_seed_center(roi)
+        if night_static_point_hit(point_mask, cx, cy, full_w, full_h):
+            continue
+        kept.append(roi)
+    return kept
+
+
+def apply_night_static_point_mask(motion_mask, point_mask, profile):
+    if not night_static_point_suppress_enabled(profile) or motion_mask is None or point_mask is None:
+        return motion_mask
+    if point_mask.shape[:2] != motion_mask.shape[:2]:
+        point_mask = cv2.resize(
+            point_mask,
+            (motion_mask.shape[1], motion_mask.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        )
+    return cv2.bitwise_and(motion_mask, cv2.bitwise_not(point_mask))
+
+
+def is_night_static_point_box(box, point_mask, full_w, full_h, profile):
+    if not night_static_point_suppress_enabled(profile) or point_mask is None or box is None or len(box) < 4:
+        return False
+    cx = (float(box[0]) + float(box[2])) * 0.5
+    cy = (float(box[1]) + float(box[3])) * 0.5
+    return night_static_point_hit(point_mask, cx, cy, full_w, full_h)
+
+
 def build_initial_video_bg_model(video_path, static_seconds=None):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -834,13 +1145,14 @@ def build_initial_video_bg_model(video_path, static_seconds=None):
     bg, tol, qrange = build_static_bg_model(samples)
     return bg, tol, qrange, sample_count, sample_span
 
-def build_static_bg_change_mask(gray, bg, tol):
+def build_static_bg_change_mask(gray, bg, tol, apply_cleanup=True):
     if not ENABLE_LOW_LAYER_STATIC_BG_MASK or bg is None or tol is None:
         return None
     bg_diff = cv2.absdiff(gray, bg)
     changed = (bg_diff.astype(np.uint16) > tol.astype(np.uint16)).astype(np.uint8) * 255
-    changed = cv2.morphologyEx(changed, cv2.MORPH_OPEN, STATIC_BG_OPEN_KERNEL, iterations=1)
-    changed = cv2.dilate(changed, STATIC_BG_DILATE_KERNEL, iterations=1)
+    if apply_cleanup:
+        changed = cv2.morphologyEx(changed, cv2.MORPH_OPEN, STATIC_BG_OPEN_KERNEL, iterations=1)
+        changed = cv2.dilate(changed, STATIC_BG_DILATE_KERNEL, iterations=1)
     return changed
 
 def cleanup_motion_mask_with_iters(mask, erode_iter, dilate_iter, close_iter):
@@ -1284,6 +1596,7 @@ def motion_rois_from_mask(
                 ))
     temp_rois.sort(key=lambda r: r[4], reverse=True)
     rois = merge_nearby_boxes(temp_rois, dist_thresh=300)
+    rois = suppress_overlapping_rois(rois)
     rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
     return prioritize_diverse_rois(rois, full_w, full_h)
 
@@ -1629,7 +1942,7 @@ class TrajectoryFilter:
             return False
         if float(trk.get('score', 0.0)) < HOVER_MIN_TRACK_SCORE:
             return False
-        if not self._is_confirmed(trk):
+        if not self._is_confirmed(trk, frame_idx=frame_idx):
             return False
         if self._track_speed_px_per_frame(trk) > HOVER_MAX_SPEED_PX_PER_FRAME:
             return False
@@ -1731,9 +2044,12 @@ class TrajectoryFilter:
     def _start_track(self, det, frame, frame_idx):
         cx, cy = self._center(det)
         w, h = self._box_wh(det)
+        det_layer = det[7] if len(det) > 7 and isinstance(det[7], str) else self.profile.get("name", "high")
         trk = {
             'id': self.next_id,
             'box': det[:4],
+            'layer': det_layer,
+            'layer_history': deque([det_layer], maxlen=self.recent_window),
             'cx': cx,
             'cy': cy,
             'w': w,
@@ -1768,6 +2084,7 @@ class TrajectoryFilter:
 
     def _update_track(self, trk, det, frame, frame_idx, match_score, tmpl_score):
         cx, cy = self._center(det)
+        det_layer = det[7] if len(det) > 7 and isinstance(det[7], str) else trk.get('layer', self.profile.get("name", "high"))
         dt = max(1, int(frame_idx) - int(trk['last_frame']))
         nvx = (cx - trk['cx']) / dt
         nvy = (cy - trk['cy']) / dt
@@ -1777,6 +2094,10 @@ class TrajectoryFilter:
         trk['cx'], trk['cy'] = cx, cy
         trk['w'], trk['h'] = self._box_wh(det)
         trk['box'] = det[:4]
+        trk['layer'] = det_layer
+        if not isinstance(trk.get('layer_history'), deque):
+            trk['layer_history'] = deque([trk.get('layer', det_layer)], maxlen=self.recent_window)
+        trk['layer_history'].append(det_layer)
         trk['last_frame'] = int(frame_idx)
         trk['last_yolo_frame'] = int(frame_idx)
         trk['hits'] += 1
@@ -1890,14 +2211,17 @@ class TrajectoryFilter:
             and traj_score >= TRACKER_MIN_TRAJ_SCORE
         )
 
-    def _is_static_confirmed(self, trk):
+    def _is_static_confirmed(self, trk, frame_idx=None):
         if not ENABLE_STATIC_CONFIRM:
             return False
         if trk.get('yolo_hits', 0) < STATIC_CONFIRM_YOLO_HITS:
             return False
-        if self._recent_yolo_hits(trk, self.recent_window) < STATIC_CONFIRM_RECENT_HITS:
+        recent_window = min(self.recent_window, max(STATIC_CONFIRM_RECENT_WINDOW, STATIC_CONFIRM_RECENT_HITS))
+        if self._recent_yolo_hits(trk, recent_window) < STATIC_CONFIRM_RECENT_HITS:
             return False
-        if trk.get('misses', 0) > STATIC_CONFIRM_MAX_MISSES:
+        if trk.get('misses', 0) > STATIC_CONFIRM_KEEP_MISSES:
+            return False
+        if frame_idx is not None and self._visual_lock_yolo_gap(trk, frame_idx) > STATIC_CONFIRM_MAX_YOLO_GAP_FRAMES:
             return False
         if float(trk.get('score', 0.0)) < STATIC_CONFIRM_MIN_SCORE:
             return False
@@ -1923,8 +2247,8 @@ class TrajectoryFilter:
             return False
         return True
 
-    def _is_confirmed(self, trk):
-        if self._is_static_confirmed(trk):
+    def _is_confirmed(self, trk, frame_idx=None):
+        if self._is_static_confirmed(trk, frame_idx=frame_idx):
             return True
         if not self._basic_is_confirmed(trk):
             return False
@@ -1963,7 +2287,9 @@ class TrajectoryFilter:
 
         kept = []
         for trk in self.trackers:
-            if trk['misses'] <= YOLO_TRACK_MAX_SEARCH_MISSES and trk['score'] >= 0.12:
+            max_misses = STATIC_CONFIRM_KEEP_MISSES if self._is_static_confirmed(trk) else YOLO_TRACK_MAX_SEARCH_MISSES
+            min_score = 0.08 if max_misses > YOLO_TRACK_MAX_SEARCH_MISSES else 0.12
+            if trk['misses'] <= max_misses and trk['score'] >= min_score:
                 kept.append(trk)
         self.trackers = kept
         return [t['box'] for t in self.get_confirmed_tracks(frame_idx)]
@@ -2043,7 +2369,7 @@ class TrajectoryFilter:
                 last_yolo_frame = int(trk.get('last_yolo_frame', trk.get('last_frame', frame_idx)))
                 if int(frame_idx) - last_yolo_frame < recheck_min_gap_frames:
                     continue
-            if self.profile["track_search_confirmed_only"] and not self._is_confirmed(trk):
+            if self.profile["track_search_confirmed_only"] and not self._is_confirmed(trk, frame_idx=frame_idx):
                 continue
             if self.profile["track_search_min_net_motion_px"] > 0.0 and self._net_motion_px(trk) < self.profile["track_search_min_net_motion_px"]:
                 continue
@@ -2098,9 +2424,11 @@ class TrajectoryFilter:
         confirmed = []
         for trk in self.trackers:
             track_age = max(0, int(frame_idx) - int(trk.get('last_frame', frame_idx)))
-            if track_age > TRACK_SEARCH_MAX_AGE_FRAMES:
+            static_confirmed = self._is_static_confirmed(trk, frame_idx=frame_idx)
+            max_age_frames = STATIC_CONFIRM_MAX_AGE_FRAMES if static_confirmed else TRACK_SEARCH_MAX_AGE_FRAMES
+            if track_age > max_age_frames:
                 continue
-            if not self._is_confirmed(trk):
+            if not static_confirmed and not self._is_confirmed(trk, frame_idx=frame_idx):
                 continue
             box = trk['box']
             history = list(trk['history'])
@@ -2110,6 +2438,7 @@ class TrajectoryFilter:
             confirmed.append({
                 'id': trk['id'],
                 'box': box,
+                'layer': trk.get('layer', self.profile.get("name", "high")),
                 'history': history,
                 'score': trk['score'],
                 'trajectory_score': self._trajectory_score(trk),
@@ -2129,7 +2458,7 @@ class TrajectoryFilter:
                 'visual_lock_recheck_due': bool(trk.get('visual_lock_recheck_due', False)),
                 'visual_lock_overdue_frames': int(trk.get('visual_lock_overdue_frames', 0)),
                 'yolo_gap_frames': self._visual_lock_yolo_gap(trk, frame_idx),
-                'static_confirmed': bool(self._is_static_confirmed(trk)),
+                'static_confirmed': bool(static_confirmed),
                 'last_yolo_frame': int(trk.get('last_yolo_frame', trk.get('last_frame', frame_idx))),
             })
         return confirmed
@@ -2234,12 +2563,16 @@ def inference_worker(worker_idx=0):
             i = (next_cam + offset) % N_CAM
             try:
                 item = inf_queues[i].get_nowait()
-                if len(item) >= 7:
+                if len(item) >= 8:
+                    roi, x, y, src_frame_idx, enqueue_ts, seed_cx, seed_cy, roi_layer = item[:8]
+                elif len(item) >= 7:
                     roi, x, y, src_frame_idx, enqueue_ts, seed_cx, seed_cy = item[:7]
+                    roi_layer = "high" if HIGH_LAYER_MODE else "low"
                 else:
                     roi, x, y, src_frame_idx, enqueue_ts = item
                     seed_cx = float(x) + roi.shape[1] * 0.5
                     seed_cy = float(y) + roi.shape[0] * 0.5
+                    roi_layer = "high" if HIGH_LAYER_MODE else "low"
                 did_work = True
                 next_cam = (i + 1) % N_CAM
                 if time.monotonic() - enqueue_ts > NPU_TASK_MAX_AGE_SEC:
@@ -2254,7 +2587,7 @@ def inference_worker(worker_idx=0):
                 rh, rw = roi.shape[:2]
                 if res is None:
                     res = []
-                put_latest(res_queues[i], (res, x, y, rw, rh, src_frame_idx, seed_cx, seed_cy))
+                put_latest(res_queues[i], (res, x, y, rw, rh, src_frame_idx, seed_cx, seed_cy, roi_layer))
                 break
             except queue.Empty:
                 pass
@@ -2350,6 +2683,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             detection_csv_file,
             fieldnames=[
                 "kind", "source_frame", "display_frame", "time_s", "track_id",
+                "layer",
                 "x1", "y1", "x2", "y2", "cx", "cy", "width", "height",
                 "center_x_norm", "center_y_norm", "lower_half", "confidence",
                 "misses", "age", "traj_score", "yolo_hits",
@@ -2378,6 +2712,9 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         fps=source_fps,
         layer_profile=cam_profile,
     )
+    edge_high_profile, edge_low_profile = edge_region_profiles()
+    edge_low_region_mask = None
+    edge_region_mask_frame = -EDGE_REGION_UPDATE_FRAMES
     print(
         f"--> Cam {cam_idx} frame-diff cadence: capture={actual_capture_w}x{actual_capture_h} "
         f"diff={DIFF_W}x{DIFF_H} reported_fps={source_fps:.1f} "
@@ -2402,6 +2739,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
     bg_samples = []
     bg_gray, bg_tol, bg_qrange = initial_bg_gray, initial_bg_tol, initial_bg_qrange
     bg_risk_model = build_background_risk_model(bg_qrange)
+    bg_static_point_mask = build_night_static_point_mask(bg_gray, bg_qrange, cam_profile)
     bg_learning_start_ts = None
     bg_next_sample_ts = 0.0
     last_tracker_update_frame = 0
@@ -2449,12 +2787,15 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         cx = 0.5 * (x1 + x2)
         cy = 0.5 * (y1 + y2)
         confidence = float(box[4]) if len(box) > 4 else float((track or {}).get("score", 0.0))
+        box_layer = box[7] if len(box) > 7 and isinstance(box[7], str) else ""
+        layer = str((track or {}).get("layer", box_layer))
         detection_csv_writer.writerow({
             "kind": kind,
             "source_frame": int(source_frame_idx),
             "display_frame": int(display_frame_idx),
             "time_s": f"{float(source_frame_idx) / max(source_fps, 1.0):.3f}",
             "track_id": int((track or {}).get("id", -1)),
+            "layer": layer,
             "x1": f"{x1:.2f}", "y1": f"{y1:.2f}",
             "x2": f"{x2:.2f}", "y2": f"{y2:.2f}",
             "cx": f"{cx:.2f}", "cy": f"{cy:.2f}",
@@ -2497,12 +2838,23 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             except queue.Empty:
                 break
 
-            if len(result) >= 8:
+            if len(result) >= 9:
+                dets, xo, yo, roi_w, roi_h, src_frame_idx, seed_cx, seed_cy, roi_layer = result[:9]
+            elif len(result) >= 8:
                 dets, xo, yo, roi_w, roi_h, src_frame_idx, seed_cx, seed_cy = result[:8]
+                roi_layer = cam_profile.get("name", "high")
             else:
                 dets, xo, yo, roi_w, roi_h, src_frame_idx = result
                 seed_cx = float(xo) + float(roi_w) * 0.5
                 seed_cy = float(yo) + float(roi_h) * 0.5
+                roi_layer = cam_profile.get("name", "high")
+            det_profile = (
+                edge_low_profile
+                if ENABLE_EDGE_REGION_LAYER and roi_layer == "low"
+                else edge_high_profile
+                if ENABLE_EDGE_REGION_LAYER and roi_layer == "high"
+                else cam_profile
+            )
 
             src_frame_idx = int(src_frame_idx)
             if src_frame_idx <= last_grouped_result_frame:
@@ -2513,8 +2865,8 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             sx = float(roi_w) / float(CROP_SIZE)
             sy = float(roi_h) / float(CROP_SIZE)
             for det in dets:
-                score = float(det[4]) if len(det) > 4 else float(cam_profile["conf_thresh"])
-                if score < float(cam_profile["conf_thresh"]):
+                score = float(det[4]) if len(det) > 4 else float(det_profile["conf_thresh"])
+                if score < float(det_profile["conf_thresh"]):
                     continue
                 mapped_box = [
                     int(max(0, min(full_w, det[0] * sx + xo))),
@@ -2523,15 +2875,18 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                     int(max(0, min(full_h, det[3] * sy + yo))),
                     score,
                 ]
+                if is_night_static_point_box(mapped_box, bg_static_point_mask, full_w, full_h, det_profile):
+                    continue
                 background_risk = background_risk_for_box(mapped_box, bg_risk_model, full_w, full_h)
                 seed_alignment = motion_seed_alignment(mapped_box, seed_cx, seed_cy)
                 if background_risk > seed_alignment:
                     continue
                 mapped_box.extend((background_risk, seed_alignment))
+                mapped_box.append(roi_layer)
                 if (
                     mapped_box[2] > mapped_box[0]
                     and mapped_box[3] > mapped_box[1]
-                    and is_valid_detection_box_size(mapped_box, cam_profile)
+                    and is_valid_detection_box_size(mapped_box, det_profile)
                     and not is_vertical_strip_box(mapped_box)
                 ):
                     pending_result_boxes[src_frame_idx].append(mapped_box)
@@ -2664,38 +3019,48 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                     bg_learning_start_ts = now_ts
                     bg_next_sample_ts = now_ts
                     print(f"--> Cam {cam_idx} learning its own static background.", flush=True)
-                sample_interval = cam_profile["static_bg_seconds"] / float(max(1, LOW_BG_SAMPLE_FRAMES))
+                bg_learn_seconds = online_static_bg_seconds(cam_profile)
+                sample_interval = bg_learn_seconds / float(max(1, LOW_BG_SAMPLE_FRAMES))
                 if now_ts >= bg_next_sample_ts and len(bg_samples) < LOW_BG_SAMPLE_FRAMES:
                     bg_samples.append(gray_small.copy())
                     bg_next_sample_ts += sample_interval
                 learning_elapsed = now_ts - bg_learning_start_ts
                 enough_samples = len(bg_samples) >= LOW_BG_SAMPLE_FRAMES
-                fallback_samples = learning_elapsed >= cam_profile["static_bg_seconds"] + 2.0 and len(bg_samples) >= 20
-                if learning_elapsed >= cam_profile["static_bg_seconds"] and (enough_samples or fallback_samples):
+                fallback_samples = learning_elapsed >= bg_learn_seconds + 2.0 and len(bg_samples) >= 20
+                if learning_elapsed >= bg_learn_seconds and (enough_samples or fallback_samples):
                     bg_sample_count = len(bg_samples)
                     bg_gray, bg_tol, bg_qrange = build_static_bg_model(bg_samples)
                     bg_risk_model = build_background_risk_model(bg_qrange)
-                    auto_high, auto_reason, day_scene, layer_confidence = estimate_layer_from_background(bg_gray, bg_qrange)
-                    cam_profile = make_layer_profile(
-                        auto_high,
-                        f"online:{auto_reason}",
-                        day_scene=day_scene,
-                        layer_confidence=layer_confidence,
-                    )
+                    cam_profile = make_cam_profile_from_background(cam_idx, bg_gray, bg_qrange)
+                    cam_profile["reason"] = f"online:{cam_profile.get('reason', '')}"
                     CAM_LAYER_PROFILES[cam_idx] = cam_profile
                     set_current_layer_profile(cam_profile)
                     tracker.profile = cam_profile
+                    bg_static_point_mask = build_night_static_point_mask(bg_gray, bg_qrange, cam_profile)
                     bg_samples = []
+                    static_point_count = cv2.countNonZero(bg_static_point_mask) if bg_static_point_mask is not None else 0
                     print(
                         f"--> Cam {cam_idx} own static background ready: "
-                        f"seconds={learning_elapsed:.1f} samples={bg_sample_count} "
+                        f"seconds={learning_elapsed:.1f}/{bg_learn_seconds:.1f} samples={bg_sample_count} "
                         f"day={cam_profile.get('day_scene')} "
                         f"roi=native640+tight "
-                        f"layer_conf={cam_profile.get('layer_confidence', 0.0):.2f}",
+                        f"layer_conf={cam_profile.get('layer_confidence', 0.0):.2f} "
+                        f"static_points={static_point_count}",
                         flush=True,
                     )
                 frame_t1 = gray_small
                 if not DIRECT_FULL_FRAME_INFERENCE:
+                    if draw_this_frame:
+                        try:
+                            show_frame = cv2.resize(frame, (VIDEO_STREAM_W, VIDEO_STREAM_H), interpolation=cv2.INTER_AREA)
+                            if send_video_this_frame:
+                                v_sender.send(BOARD_ID, cam_idx, show_frame)
+                            if output_writer is not None:
+                                output_writer.write(show_frame)
+                            if SHOW_INDIVIDUAL_WINDOWS:
+                                put_latest(display_queues[cam_idx], show_frame)
+                        except Exception:
+                            pass
                     continue
             
             rois =[]
@@ -2715,34 +3080,132 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             if ENABLE_FRAME_DIFF_ROIS and frame_t1 is not None:
                 with FRAME_DIFF_LOCK:
                     diff_img = cv2.absdiff(frame_t1, gray_small)
-                    _, mask = cv2.threshold(diff_img, cam_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
-                    bg_change_mask = build_static_bg_change_mask(gray_small, bg_gray, bg_tol)
-                    if bg_change_mask is not None and cam_profile.get("enable_static_bg_change_gate", True):
-                        mask = cv2.bitwise_and(mask, bg_change_mask)
-                    mask = cleanup_motion_mask_with_iters(
-                        mask,
-                        MOTION_ERODE_ITER,
-                        MOTION_DILATE_ITER,
-                        MOTION_CLOSE_ITER,
-                    )
-                    motion_mask = cv2.bitwise_or(motion_mask, mask) if motion_mask is not None else mask
-                    diff_rois = motion_rois_from_mask(
-                        mask,
-                        diff_img,
-                        gray_small,
-                        scale_x,
-                        scale_y,
-                        W,
-                        H,
-                    )
+                    diff_rois = []
+                    if ENABLE_EDGE_REGION_LAYER:
+                        if (
+                            edge_low_region_mask is None
+                            or f_idx - edge_region_mask_frame >= EDGE_REGION_UPDATE_FRAMES
+                        ):
+                            edge_low_region_mask = build_edge_low_region_mask(gray_small, bg_gray)
+                            edge_region_mask_frame = f_idx
+
+                        high_region_mask = (
+                            cv2.bitwise_not(edge_low_region_mask)
+                            if edge_low_region_mask is not None
+                            else np.full(gray_small.shape, 255, dtype=np.uint8)
+                        )
+                        _, high_mask = cv2.threshold(diff_img, edge_high_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
+                        high_mask = cleanup_motion_mask_with_iters(
+                            high_mask,
+                            edge_high_profile.get("motion_erode_iter", MOTION_ERODE_ITER),
+                            edge_high_profile.get("motion_dilate_iter", MOTION_DILATE_ITER),
+                            edge_high_profile.get("motion_close_iter", MOTION_CLOSE_ITER),
+                        )
+                        high_mask = apply_night_static_point_mask(
+                            high_mask,
+                            bg_static_point_mask,
+                            edge_high_profile,
+                        )
+                        high_region_motion_mask = cv2.bitwise_and(high_mask, high_region_mask)
+                        motion_mask = (
+                            cv2.bitwise_or(motion_mask, high_region_motion_mask)
+                            if motion_mask is not None
+                            else high_region_motion_mask
+                        )
+                        set_current_layer_profile(edge_high_profile)
+                        high_rois_all = motion_rois_from_mask(
+                            high_mask,
+                            diff_img,
+                            gray_small,
+                            scale_x,
+                            scale_y,
+                            W,
+                            H,
+                        )
+                        high_rois = [
+                            r for r in high_rois_all
+                            if not roi_has_region_support(r, edge_low_region_mask, W, H)
+                        ]
+                        diff_rois.extend(tag_roi_layer(r, "high") for r in high_rois)
+
+                        if edge_low_region_mask is not None:
+                            _, low_mask = cv2.threshold(diff_img, edge_low_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
+                            bg_change_mask = build_static_bg_change_mask(
+                                gray_small,
+                                bg_gray,
+                                bg_tol,
+                                apply_cleanup=False,
+                            )
+                            if bg_change_mask is not None and edge_low_profile.get("enable_static_bg_change_gate", True):
+                                low_mask = cv2.bitwise_and(low_mask, bg_change_mask)
+                            low_mask = cleanup_motion_mask_with_iters(
+                                low_mask,
+                                edge_low_profile.get("motion_erode_iter", MOTION_ERODE_ITER),
+                                edge_low_profile.get("motion_dilate_iter", MOTION_DILATE_ITER),
+                                edge_low_profile.get("motion_close_iter", MOTION_CLOSE_ITER),
+                            )
+                            low_mask = apply_night_static_point_mask(
+                                low_mask,
+                                bg_static_point_mask,
+                                edge_low_profile,
+                            )
+                            low_region_motion_mask = cv2.bitwise_and(low_mask, edge_low_region_mask)
+                            motion_mask = (
+                                cv2.bitwise_or(motion_mask, low_region_motion_mask)
+                                if motion_mask is not None
+                                else low_region_motion_mask
+                            )
+                            set_current_layer_profile(edge_low_profile)
+                            low_rois_all = motion_rois_from_mask(
+                                low_mask,
+                                diff_img,
+                                gray_small,
+                                scale_x,
+                                scale_y,
+                                W,
+                                H,
+                            )
+                            low_rois = [
+                                r for r in low_rois_all
+                                if roi_has_region_support(r, edge_low_region_mask, W, H)
+                            ]
+                            diff_rois.extend(
+                                tag_roi_layer(add_roi_score(r, EDGE_REGION_LOW_SCORE_BOOST), "low")
+                                for r in low_rois
+                            )
+                        set_current_layer_profile(cam_profile)
+                    else:
+                        _, mask = cv2.threshold(diff_img, cam_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
+                        bg_change_mask = build_static_bg_change_mask(gray_small, bg_gray, bg_tol)
+                        if bg_change_mask is not None and cam_profile.get("enable_static_bg_change_gate", True):
+                            mask = cv2.bitwise_and(mask, bg_change_mask)
+                        mask = cleanup_motion_mask_with_iters(
+                            mask,
+                            cam_profile.get("motion_erode_iter", MOTION_ERODE_ITER),
+                            cam_profile.get("motion_dilate_iter", MOTION_DILATE_ITER),
+                            cam_profile.get("motion_close_iter", MOTION_CLOSE_ITER),
+                        )
+                        mask = apply_night_static_point_mask(mask, bg_static_point_mask, cam_profile)
+                        motion_mask = cv2.bitwise_or(motion_mask, mask) if motion_mask is not None else mask
+                        diff_rois = motion_rois_from_mask(
+                            mask,
+                            diff_img,
+                            gray_small,
+                            scale_x,
+                            scale_y,
+                            W,
+                            H,
+                        )
                 if diff_rois:
                     rois = merge_nearby_boxes(diff_rois + rois, dist_thresh=160)
+                    rois = suppress_overlapping_rois(rois)
                     rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                     rois = prioritize_diverse_rois(rois, W, H)
 
             gray_seed_rois = gray_seed_rois_from_frame(gray_small, scale_x, scale_y, W, H)
             if gray_seed_rois:
                 rois = merge_nearby_boxes(gray_seed_rois + rois, dist_thresh=160)
+                rois = suppress_overlapping_rois(rois)
                 rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                 rois = prioritize_diverse_rois(rois, W, H)
 
@@ -2752,8 +3215,11 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             if ENABLE_FRAME_DIFF_ROIS and (track_rois or hover_rois):
                 track_roi_keys = {tuple(int(v) for v in r[:4]) for r in (track_rois + hover_rois)}
                 rois = merge_nearby_boxes(track_rois + hover_rois + rois, dist_thresh=160)
+                rois = suppress_overlapping_rois(rois)
                 rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                 rois = prioritize_diverse_rois(rois, W, H)
+
+            rois = filter_night_static_point_rois(rois, bg_static_point_mask, W, H, cam_profile)
 
             if (
                 ENABLE_FULLFRAME_SEARCH_FALLBACK
@@ -2777,6 +3243,10 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                 else:
                     rois = [(0, 0, W, H, 1.0)] + selected_zoom
                 track_roi_keys.clear()
+            elif rois:
+                rois = suppress_overlapping_rois(rois)
+                rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
+                rois = prioritize_diverse_rois(rois, W, H)
 
             if ENABLE_FRAME_DIFF_ROIS:
                 frame_t1 = gray_small
@@ -2793,11 +3263,19 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             for roi in rois[:MAX_ENQUEUED_ROIS_PER_UPDATE]:
                 x1, y1, x2, y2 = roi[:4]
                 seed_cx, seed_cy = roi_seed_center(roi)
+                roi_layer = roi_layer_name(roi, cam_profile.get("name", "high"))
+                roi_profile = (
+                    edge_low_profile
+                    if ENABLE_EDGE_REGION_LAYER and roi_layer == "low"
+                    else edge_high_profile
+                    if ENABLE_EDGE_REGION_LAYER and roi_layer == "high"
+                    else cam_profile
+                )
                 if roi_is_zoom_crop(roi):
                     roi_img = frame[y1:y2, x1:x2].copy()
                     origin_x = int(x1)
                     origin_y = int(y1)
-                elif cam_profile.get("enable_tight_motion_roi", False) and roi_is_padded_canvas(roi):
+                elif roi_profile.get("enable_tight_motion_roi", False) and roi_is_padded_canvas(roi):
                     roi_img = make_padded_roi_canvas(frame, roi)
                     origin_x = int(x1) - int(roi[5])
                     origin_y = int(y1) - int(roi[6])
@@ -2812,7 +3290,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                     continue
                 if put_latest(
                     inf_queues[cam_idx],
-                    (roi_img, origin_x, origin_y, f_idx, enqueue_ts, seed_cx, seed_cy),
+                    (roi_img, origin_x, origin_y, f_idx, enqueue_ts, seed_cx, seed_cy, roi_layer),
                 ):
                     submitted_task_count += 1
                     pending_result_expected[f_idx] = pending_result_expected.get(f_idx, 0) + 1
@@ -2839,8 +3317,8 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                     else:
                         label = "ROI"
                         color = (255, 255, 255)
-                    if visual_enabled and DRAW_INTERMEDIATE_BOXES:
-                        current_draw_boxes.append([x1, y1, x2, y2, color, label, 2])
+                    if draw_this_frame and DRAW_INTERMEDIATE_BOXES:
+                        current_draw_boxes.append([x1, y1, x2, y2, color, label, 1])
 
         new_raw_boxes, got_new_result = drain_inference_results(frame, f_idx, W, H)
         raw_boxes_in_this_frame.extend(new_raw_boxes)
@@ -2856,8 +3334,8 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         unique_raw_boxes = merge_nearby_boxes(raw_boxes_in_this_frame, dist_thresh=100)
         
         for rb in unique_raw_boxes:
-            if visual_enabled and DRAW_INTERMEDIATE_BOXES:
-                current_draw_boxes.append([rb[0], rb[1], rb[2], rb[3], (0, 0, 255), "Raw", 2])
+            if draw_this_frame and DRAW_INTERMEDIATE_BOXES:
+                current_draw_boxes.append([rb[0], rb[1], rb[2], rb[3], (0, 0, 255), "Raw", 1])
 
 
         if ENABLE_TRAJECTORY_TRACKING:
@@ -2881,7 +3359,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         for t in live_confirmed_tracks:
             box = t['box']
             write_detection_row("target", tracker_query_frame, f_idx, box, track=t)
-            if visual_enabled:
+            if draw_this_frame:
                 if t.get('static_confirmed', False):
                     label = "STATIC"
                 elif (
@@ -2898,7 +3376,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             if confirmed:
                 gimbal_data = [[b[0], b[1], b[2], b[3], estimate_rough_range_m(b, W)] for b in confirmed]
                 local_data_sender.send_packet("data", cam_idx, gimbal_data, target="gimbal")
-        if visual_enabled and len(current_draw_boxes) > MAX_DRAW_BOXES:
+        if draw_this_frame and len(current_draw_boxes) > MAX_DRAW_BOXES:
             current_draw_boxes = current_draw_boxes[-MAX_DRAW_BOXES:]
 
         if draw_this_frame:
@@ -2916,6 +3394,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                     output_writer.write(show_frame)
                 if SHOW_INDIVIDUAL_WINDOWS:
                     put_latest(display_queues[cam_idx], show_frame)
+                current_draw_boxes.clear()
             except: pass
     cap.release()
     if output_writer is not None:
@@ -2951,7 +3430,7 @@ if __name__ == '__main__':
                     needs_low_background = spec in ("low", "l") or (
                         (spec in ("", "auto", "a")) and ENABLE_AUTO_CAM_LAYER and not estimated_high
                     )
-                    if needs_low_background and STATIC_BG_SECONDS < 30.0:
+                    if VIDEO_FORCE_LOW_BG_30 and needs_low_background and STATIC_BG_SECONDS < 30.0:
                         bg_gray, bg_tol, bg_qrange, bg_sample_count, bg_frame_span = build_initial_video_bg_model(
                             source,
                             static_seconds=30.0,
@@ -2973,7 +3452,7 @@ if __name__ == '__main__':
                     initial_bg_gray,
                     initial_bg_qrange,
                 )
-                if not estimated_high and STATIC_BG_SECONDS < 30.0:
+                if VIDEO_FORCE_LOW_BG_30 and not estimated_high and STATIC_BG_SECONDS < 30.0:
                     initial_bg_gray, initial_bg_tol, initial_bg_qrange, bg_sample_count, bg_frame_span = build_initial_video_bg_model(
                         VIDEO_TEST_PATH,
                         static_seconds=30.0,
@@ -3002,7 +3481,13 @@ if __name__ == '__main__':
                 built_backgrounds.append((None, None, None))
         initial_backgrounds = built_backgrounds
     CAM_LAYER_PROFILES = build_cam_layer_profiles(initial_backgrounds)
-    ACTIVE_YOLO_CONF_THRESH = min(float(p["conf_thresh"]) for p in CAM_LAYER_PROFILES) if CAM_LAYER_PROFILES else CONF_THRESH
+    if ENABLE_EDGE_REGION_LAYER:
+        edge_high_profile, edge_low_profile = edge_region_profiles()
+        profile_thresholds = [float(edge_high_profile["conf_thresh"]), float(edge_low_profile["conf_thresh"])]
+        profile_thresholds.extend(float(p["conf_thresh"]) for p in CAM_LAYER_PROFILES)
+        ACTIVE_YOLO_CONF_THRESH = min(profile_thresholds)
+    else:
+        ACTIVE_YOLO_CONF_THRESH = min(float(p["conf_thresh"]) for p in CAM_LAYER_PROFILES) if CAM_LAYER_PROFILES else CONF_THRESH
     init_runtime_queues()
     latest_display_frames = [None for _ in range(N_CAM)]
 

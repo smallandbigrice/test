@@ -36,6 +36,7 @@ if ($Mode -eq "day") {
     $dropIn = @"
 [Service]
 Environment="UAV_SCENE_MODE=day"
+Environment="UAV_LAYER_MODE=high"
 Environment="UAV_RKNN_MODEL=$selectedModelRemote"
 Environment="UAV_CAPTURE_W=2560"
 Environment="UAV_CAPTURE_H=1440"
@@ -51,6 +52,7 @@ Environment="UAV_TRACK_SEARCH_ROIS=0"
 Environment="UAV_HOVER_HOLD=1"
 Environment="UAV_FULLFRAME_SEARCH_FALLBACK=0"
 Environment="UAV_FULLFRAME_FALLBACK_ONLY=0"
+Environment="UAV_DRAW_INTERMEDIATE_BOXES=0"
 "@
 } else {
     $selectedModelLocal = $NightModelLocal
@@ -58,6 +60,7 @@ Environment="UAV_FULLFRAME_FALLBACK_ONLY=0"
     $dropIn = @"
 [Service]
 Environment="UAV_SCENE_MODE=night"
+Environment="UAV_LAYER_MODE=high"
 Environment="UAV_RKNN_MODEL=$selectedModelRemote"
 Environment="UAV_CAPTURE_W=640"
 Environment="UAV_CAPTURE_H=480"
@@ -73,13 +76,14 @@ Environment="UAV_TRACK_SEARCH_ROIS=0"
 Environment="UAV_HOVER_HOLD=0"
 Environment="UAV_FULLFRAME_SEARCH_FALLBACK=0"
 Environment="UAV_FULLFRAME_FALLBACK_ONLY=0"
+Environment="UAV_DRAW_INTERMEDIATE_BOXES=0"
 "@
 }
 
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($dropIn)
 $encoded = [Convert]::ToBase64String($bytes)
 $remote = "$User@$BoardIp"
-$dropInPath = "/etc/systemd/system/$Service.d/35-uav-scene-mode.conf"
+$dropInPath = "/etc/systemd/system/$Service.d/zzzzz-uav-scene-mode.conf"
 
 if (-not $SkipModelDeploy) {
     if (Test-Path -LiteralPath $selectedModelLocal) {
