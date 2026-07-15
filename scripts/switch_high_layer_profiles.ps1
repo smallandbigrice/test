@@ -9,7 +9,8 @@ param(
         "192.168.0.5",
         "192.168.0.6",
         "192.168.0.7",
-        "192.168.0.8"
+        "192.168.0.8",
+        "192.168.0.9"
     ),
 
     [string]$User = "root",
@@ -97,6 +98,7 @@ Environment="UAV_VIDEO_STREAM_H=$VideoHeight"
 Environment="UAV_VIDEO_SEND_EVERY_N_FRAMES=$VideoSendEvery"
 Environment="UAV_VIDEO_JPEG_QUALITY=$VideoJpegQuality"
 "@
+$DropIn = $DropIn -replace "`r`n", "`n"
 
 $EncodedDropIn = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($DropIn))
 $DropInPath = "/etc/systemd/system/$Service.d/zzzzz-uav-scene-mode.conf"
@@ -105,6 +107,7 @@ dir="/etc/systemd/system/$Service.d"
 mkdir -p "`$dir"
 find "`$dir" -maxdepth 1 -type f \( -name '10-uav-ui.conf' -o -name '20-uav-video-receiver.conf' -o -name '30-*.conf' -o -name '35-uav-scene-mode.conf' -o -name '99-*.conf' -o -name 'zz*.conf' \) ! -name 'zzzzz-uav-scene-mode.conf' -delete
 "@
+$CleanupCommand = $CleanupCommand -replace "`r`n", "`n"
 
 foreach ($BoardIp in $BoardIps) {
     $Remote = "$User@$BoardIp"
