@@ -27,6 +27,47 @@ record_2k_pure/
 *.onnx
 *.rknn
 
+# Local legacy root files kept outside the GitHub archive
+/CHANGELOG.md
+/DETECTION_CODE_GUIDE.md
+/MAIN_UPDATE_RULES.md
+/README.md
+/comms.py
+/main.py
+/merge_selected_datasets_to_all.py
+/push_main_to_boards.ps1
+/usb_update_main.sh
+/yololib.py
+/docs/main_updates/
+/scripts/switch_board_scene_mode.ps1
+/scripts/switch_high_layer_profiles.ps1
+/scripts/switch_scheme_a_complex500.ps1
+
+# Local experiments, board pulls, generated results, and workspace scratch
+/_doc_work/
+/_migration_backup_*/
+/_source_sync_backup_*/
+/apps/
+/archive/
+/board_compare/
+/board_records/
+/board_results/
+/board8_live*/
+/codex_c_drive_conversation_cleanup_*/
+/codex_current_conversation_backup/
+/complex_background_lowlayer/
+/main_updates/
+/models/
+/receiver_logs/
+/tools/
+/scheme_ABC/cleanup_logs/
+/scheme_ABC/datasets/A_complex_scene_500m/
+/scheme_ABC/datasets/B_day_high500/
+/scheme_ABC/datasets/C_night400/
+/scheme_ABC/datasets/source_components/
+/scheme_ABC/results/
+/scheme_ABC/videos/board_records/
+
 # Local OS/editor files
 .DS_Store
 Thumbs.db
