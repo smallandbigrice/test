@@ -69,13 +69,27 @@ ENABLE_H265_YPLANE_CAPTURE = os.environ.get("UAV_H265_YPLANE_CAPTURE", "0").stri
 H265_YPLANE_DEVICE = os.environ.get("UAV_H265_DEVICE", "/dev/video1").strip()
 H265_YPLANE_DEVICES_RAW = os.environ.get("UAV_H265_DEVICES", "").strip()
 H265_YPLANE_AUTO_DEVICES = H265_YPLANE_DEVICES_RAW.lower() in {"auto", "all", "hevc"}
+H265_YPLANE_ID_DEVICES = H265_YPLANE_DEVICES_RAW.lower() in {
+    "by-id",
+    "id",
+    "ids",
+    "serial",
+    "serials",
+    "cam_map",
+    "cam-map",
+}
 H265_YPLANE_DEVICES = (
     []
-    if H265_YPLANE_AUTO_DEVICES
+    if H265_YPLANE_AUTO_DEVICES or H265_YPLANE_ID_DEVICES
     else [item.strip() for item in H265_YPLANE_DEVICES_RAW.split(",") if item.strip()]
 )
 H265_YPLANE_CAM_INDEX = int(os.environ.get("UAV_H265_CAM_INDEX", "0"))
 H265_YPLANE_FPS = max(1, int(os.environ.get("UAV_H265_FPS", "30")))
+H265_COLOR_CAPTURE = os.environ.get("UAV_H265_COLOR_CAPTURE", "0").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
 CAMERA_WARMUP_FRAMES = max(0, int(os.environ.get("UAV_CAMERA_WARMUP_FRAMES", "0")))
 H265_YPLANE_KEEP_GRAY_PREVIEW = os.environ.get("UAV_H265_GRAY_PREVIEW", "1").strip().lower() not in (
     "0",
@@ -102,6 +116,14 @@ def _env_bool(name, default=False):
     if raw is None:
         return bool(default)
     return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _env_int(name, default):
+    return int(os.environ.get(name, str(default)))
+
+
+def _env_float(name, default):
+    return float(os.environ.get(name, str(default)))
 
 
 _EARLY_SCENE_MODE = os.environ.get("UAV_SCENE_MODE", os.environ.get("UAV_DAY_NIGHT_MODE", "day")).strip().lower()
@@ -301,20 +323,20 @@ def get_video_test_source(cam_idx):
     return VIDEO_TEST_PATH
 
 
-TRACKER_MIN_HITS = 4
+TRACKER_MIN_HITS = max(1, _env_int("UAV_TRACKER_MIN_HITS", 4))
 TRACKER_MAX_DIST = 100
 TRACKER_MAX_GATE = 320
 TRACKER_RECENT_WINDOW = 18
-TRACKER_MIN_RECENT_HITS = 3
-TRACKER_CONFIRM_SCORE = 0.50
-TRACKER_MIN_TRAJ_SCORE = 0.55
+TRACKER_MIN_RECENT_HITS = max(1, _env_int("UAV_TRACKER_MIN_RECENT_HITS", 3))
+TRACKER_CONFIRM_SCORE = min(1.0, max(0.0, _env_float("UAV_TRACKER_CONFIRM_SCORE", 0.50)))
+TRACKER_MIN_TRAJ_SCORE = min(1.0, max(0.0, _env_float("UAV_TRACKER_MIN_TRAJ_SCORE", 0.55)))
 TRACKER_MATCH_SCORE = 0.25
 TRACKER_TEMPLATE_SIZE = 31
 TRACKER_MAX_SPEED_MPS = 10.0
-YOLO_DIRECT_CONFIRM_HITS = 3
-YOLO_DIRECT_CONFIRM_RECENT_HITS = 3
-YOLO_DIRECT_CONFIRM_SCORE = 0.40
-YOLO_DIRECT_CONFIRM_MAX_MISSES = 0
+YOLO_DIRECT_CONFIRM_HITS = max(1, _env_int("UAV_YOLO_DIRECT_CONFIRM_HITS", 3))
+YOLO_DIRECT_CONFIRM_RECENT_HITS = max(1, _env_int("UAV_YOLO_DIRECT_CONFIRM_RECENT_HITS", 3))
+YOLO_DIRECT_CONFIRM_SCORE = min(1.0, max(0.0, _env_float("UAV_YOLO_DIRECT_CONFIRM_SCORE", 0.40)))
+YOLO_DIRECT_CONFIRM_MAX_MISSES = max(0, _env_int("UAV_YOLO_DIRECT_CONFIRM_MAX_MISSES", 0))
 YOLO_TRACK_MAX_CONFIRMED_MISSES = 2
 YOLO_TRACK_MAX_SEARCH_MISSES = max(1, int(os.environ.get("UAV_TRACK_MAX_SEARCH_MISSES", "8")))
 TRACK_SEARCH_PREDICT_MAX_MISSES = 2
@@ -710,8 +732,16 @@ def make_layer_profile(high, reason="global", day_scene=None, layer_confidence=0
         "max_det_box_w": HIGH_MAX_DET_BOX_W if high else LOW_MAX_DET_BOX_W,
         "max_det_box_h": HIGH_MAX_DET_BOX_H if high else LOW_MAX_DET_BOX_H,
         "max_det_box_area": HIGH_MAX_DET_BOX_AREA if high else LOW_MAX_DET_BOX_AREA,
-        "track_confirm_min_net_motion_px": 6.0 if high else 10.0,
-        "track_confirm_min_straightness": 0.24 if high else 0.35,
+        "track_confirm_min_net_motion_px": (
+            _env_float("UAV_TRACK_CONFIRM_MIN_NET_MOTION_PX_HIGH", 6.0)
+            if high
+            else _env_float("UAV_TRACK_CONFIRM_MIN_NET_MOTION_PX_LOW", 10.0)
+        ),
+        "track_confirm_min_straightness": (
+            _env_float("UAV_TRACK_CONFIRM_MIN_STRAIGHTNESS_HIGH", 0.24)
+            if high
+            else _env_float("UAV_TRACK_CONFIRM_MIN_STRAIGHTNESS_LOW", 0.35)
+        ),
         "min_diff_area": (HIGH_LAYER_MIN_DIFF_AREA if high else LOW_LAYER_MIN_DIFF_AREA) if ENABLE_FRAME_DIFF_ROIS else 0,
         "far_min_compactness": 0.0 if high else 0.18,
     }
@@ -2843,16 +2873,28 @@ class TrajectoryFilter:
             })
         return confirmed
 
-def get_camera_node(bus_info_keyword):
+def get_camera_nodes(bus_info_keyword):
     try:
         out = subprocess.check_output("v4l2-ctl --list-devices", shell=True).decode("utf-8").split('\n')
         is_target = False
+        nodes = []
         for line in out:
             line = line.strip()
-            if not line: continue
-            if not line.startswith('/dev/video'): is_target = (bus_info_keyword in line)
-            elif is_target and line.startswith('/dev/video'): return line
+            if not line:
+                continue
+            if not line.startswith('/dev/video'):
+                is_target = (bus_info_keyword in line)
+            elif is_target and line.startswith('/dev/video'):
+                nodes.append(line)
+        return nodes
     except: pass
+    return []
+
+
+def get_camera_node(bus_info_keyword):
+    nodes = get_camera_nodes(bus_info_keyword)
+    if nodes:
+        return nodes[0]
     return None
 
 
@@ -2864,6 +2906,18 @@ def _video_node_sort_key(path):
     return int(m.group(1)) if m else 9999
 
 
+def video_node_supports_h265(path):
+    try:
+        out = subprocess.check_output(
+            ["v4l2-ctl", "-d", str(path), "--list-formats-ext"],
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        ).decode("utf-8", errors="ignore")
+    except Exception:
+        return False
+    return "HEVC" in out or "H265" in out or "H.265" in out
+
+
 def discover_h265_devices():
     global _H265_DEVICE_CACHE
     if _H265_DEVICE_CACHE is not None:
@@ -2872,15 +2926,7 @@ def discover_h265_devices():
     for path in sorted(glob.glob("/dev/video*"), key=_video_node_sort_key):
         if not re.search(r"/dev/video\d+$", path):
             continue
-        try:
-            out = subprocess.check_output(
-                ["v4l2-ctl", "-d", path, "--list-formats-ext"],
-                stderr=subprocess.DEVNULL,
-                timeout=2.0,
-            ).decode("utf-8", errors="ignore")
-        except Exception:
-            continue
-        if "HEVC" in out or "H265" in out or "H.265" in out:
+        if video_node_supports_h265(path):
             devices.append(path)
     _H265_DEVICE_CACHE = devices
     return list(_H265_DEVICE_CACHE)
@@ -2894,6 +2940,12 @@ def get_h265_device_for_cam(cam_idx):
     if H265_YPLANE_AUTO_DEVICES:
         devices = discover_h265_devices()
         return devices[cam_idx] if cam_idx < len(devices) else None
+    if H265_YPLANE_ID_DEVICES:
+        target_hw_id = CAM_MAP.get(int(cam_idx), f"00000000{int(cam_idx) + 1}")
+        for node in get_camera_nodes(target_hw_id):
+            if video_node_supports_h265(node):
+                return node
+        return None
     if int(cam_idx) == H265_YPLANE_CAM_INDEX:
         return H265_YPLANE_DEVICE or "/dev/video1"
     return None
@@ -2921,14 +2973,24 @@ class H265YPlaneCapture:
 
         Gst.init(None)
         self.Gst = Gst
-        pipeline_text = (
-            f"v4l2src device={self.device} io-mode=2 ! "
-            f"video/x-h265,stream-format=byte-stream,width={self.width},height={self.height},"
-            f"framerate={int(round(self.fps))}/1 ! "
-            "h265parse ! mppvideodec fast-mode=true format=NV12 ! "
-            "video/x-raw,format=NV12 ! "
-            "appsink name=sink sync=false drop=true max-buffers=1"
-        )
+        if H265_COLOR_CAPTURE:
+            pipeline_text = (
+                f"v4l2src device={self.device} io-mode=2 ! "
+                f"video/x-h265,stream-format=byte-stream,width={self.width},height={self.height},"
+                f"framerate={int(round(self.fps))}/1 ! "
+                "h265parse ! mppvideodec fast-mode=true format=NV12 ! "
+                "video/x-raw,format=NV12 ! "
+                "appsink name=sink sync=false drop=true max-buffers=1"
+            )
+        else:
+            pipeline_text = (
+                f"v4l2src device={self.device} io-mode=2 ! "
+                f"video/x-h265,stream-format=byte-stream,width={self.width},height={self.height},"
+                f"framerate={int(round(self.fps))}/1 ! "
+                "h265parse ! mppvideodec fast-mode=true format=NV12 ! "
+                "video/x-raw,format=NV12 ! "
+                "appsink name=sink sync=false drop=true max-buffers=1"
+            )
         self.pipeline = Gst.parse_launch(pipeline_text)
         self.sink = self.pipeline.get_by_name("sink")
         if self.sink is None:
@@ -2977,6 +3039,15 @@ class H265YPlaneCapture:
             estimated_stride = int(round(raw.size * 2.0 / max(1.0, self.height * 3.0)))
             stride = estimated_stride if estimated_stride >= self.width and estimated_stride * self.height <= raw.size else self.width
             y = raw[: stride * self.height].reshape(self.height, stride)[:, : self.width]
+            if H265_COLOR_CAPTURE:
+                uv_size = stride * (self.height // 2)
+                uv_start = stride * self.height
+                uv_end = uv_start + uv_size
+                if raw.size < uv_end:
+                    return False, None
+                uv = raw[uv_start:uv_end].reshape(self.height // 2, stride)[:, : self.width]
+                nv12 = np.ascontiguousarray(np.vstack((y, uv)))
+                return True, cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
             return True, y.copy()
         finally:
             buf.unmap(info)
@@ -4434,13 +4505,16 @@ if __name__ == '__main__':
         h265_devices_desc = (
             "auto"
             if H265_YPLANE_AUTO_DEVICES
+            else "by-id"
+            if H265_YPLANE_ID_DEVICES
             else ",".join(H265_YPLANE_DEVICES)
             if H265_YPLANE_DEVICES
             else f"{H265_YPLANE_DEVICE}@cam{H265_YPLANE_CAM_INDEX}"
         )
         print(
             f"--> H265 Y-plane input: devices={h265_devices_desc} "
-            f"fps={H265_YPLANE_FPS} gray_preview={'on' if H265_YPLANE_KEEP_GRAY_PREVIEW else 'off'}",
+            f"fps={H265_YPLANE_FPS} color={'on' if H265_COLOR_CAPTURE else 'off'} "
+            f"gray_preview={'on' if H265_YPLANE_KEEP_GRAY_PREVIEW else 'off'}",
             flush=True,
         )
     if ENABLE_NIGHT_STARTUP_STAR_SUPPRESS:

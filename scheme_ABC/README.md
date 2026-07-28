@@ -54,11 +54,14 @@
 
 使用场景：白天高层、天空占比高、复杂背景少，目标距离远并存在悬停或慢速运动。
 
+当前口径：使用 H265 摄像头输入，`UAV_H265_DEVICES=by-id` 按摄像头序列号固定五路顺序，板端硬解后以彩色图像进入白天高层链路。检测保持 2K 采集、1920x1080 帧差、三帧帧差节奏，并放宽悬停保持和静止确认参数，减少无人机短暂停留后绿框断开的情况。
+
 核心文件：
 
 - 代码：`E:\detect uav\scheme_ABC\code\main.py`
 - 切换脚本：`E:\detect uav\scheme_ABC\scripts\switch_high_layer_profiles.ps1 -Mode day`
 - 参数模板：`E:\detect uav\scheme_ABC\configs\scheme_B_day_high500.conf`
+- 封档说明：`E:\detect uav\scheme_ABC\SCHEME_B_DAY_HIGH500_H265_COLOR_HOVER_RELAXED_20260728.md`
 - 模型：`E:\detect uav\scheme_ABC\models\yolov5s_day_20260626.rknn`
 - 模型 MD5：`30261610759aec78c94cdf7d6f6510ce`
 
@@ -83,7 +86,7 @@
 
 当前口径：夜间使用 H265 彩色摄像头输入，板端硬解后只取 NV12 的 Y 平面进入方案 C；采集和帧差均为 640x480；只有帧差产生运动点时送入 YOLO；围绕运动点裁剪 160 ROI 后放大到模型输入尺寸；关闭全帧兜底和悬停保持；开启静止亮点屏蔽；启动后 1 分钟内检测到的小目标登记为星点区域并按检测框大小屏蔽。
 
-验证说明：2026-07-25 在板8上完成单路 H265 摄像头 Y 平面验证。正式封档仍保持原方案 C 的 5 摄像头结构，`UAV_H265_DEVICES=auto` 会按板端 H265 设备自动分配到各路摄像头；单路验证只作为输入链路确认，不改变后续多摄部署口径。
+验证说明：2026-07-25 在板8上完成单路 H265 摄像头 Y 平面验证。正式封档仍保持原方案 C 的 5 摄像头结构，`UAV_H265_DEVICES=by-id` 会按摄像头序列号固定各路摄像头顺序；单路验证只作为输入链路确认，不改变后续多摄部署口径。
 
 核心文件：
 
