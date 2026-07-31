@@ -50,6 +50,7 @@ ENABLE_CAMERA_PREBUILD_BG = os.environ.get("UAV_CAMERA_PREBUILD_BG", "0").strip(
     "no",
 )
 VIDEO_TEST_MAX_SECONDS = max(0.0, float(os.environ.get("UAV_VIDEO_MAX_SECONDS", "0")))
+VIDEO_TEST_START_SECONDS = max(0.0, float(os.environ.get("UAV_VIDEO_START_SECONDS", "0")))
 VIDEO_TEST_REALTIME = os.environ.get("UAV_VIDEO_REALTIME", "1").strip().lower() not in ("0", "false", "no")
 VIDEO_TEST_LOOP = os.environ.get("UAV_VIDEO_LOOP", "1").strip().lower() not in ("0", "false", "no")
 VIDEO_TEST_OUTPUT = os.environ.get("UAV_VIDEO_OUTPUT", "").strip()
@@ -124,6 +125,10 @@ def _env_int(name, default):
 
 def _env_float(name, default):
     return float(os.environ.get(name, str(default)))
+
+
+DEBUG_ROI_STATS = _env_bool("UAV_DEBUG_ROI_STATS", False)
+DEBUG_ROI_STATS_INTERVAL = max(1, int(os.environ.get("UAV_DEBUG_ROI_STATS_INTERVAL", "30")))
 
 
 _EARLY_SCENE_MODE = os.environ.get("UAV_SCENE_MODE", os.environ.get("UAV_DAY_NIGHT_MODE", "day")).strip().lower()
@@ -339,9 +344,9 @@ YOLO_DIRECT_CONFIRM_SCORE = min(1.0, max(0.0, _env_float("UAV_YOLO_DIRECT_CONFIR
 YOLO_DIRECT_CONFIRM_MAX_MISSES = max(0, _env_int("UAV_YOLO_DIRECT_CONFIRM_MAX_MISSES", 0))
 YOLO_TRACK_MAX_CONFIRMED_MISSES = 2
 YOLO_TRACK_MAX_SEARCH_MISSES = max(1, int(os.environ.get("UAV_TRACK_MAX_SEARCH_MISSES", "8")))
-TRACK_SEARCH_PREDICT_MAX_MISSES = 2
+TRACK_SEARCH_PREDICT_MAX_MISSES = max(1, int(os.environ.get("UAV_TRACK_SEARCH_PREDICT_MAX_MISSES", "2")))
 MISS_VELOCITY_DECAY = 0.55
-MAX_TRACK_ROIS_PER_FRAME = 3
+MAX_TRACK_ROIS_PER_FRAME = max(1, int(os.environ.get("UAV_TRACK_SEARCH_MAX_ROIS_PER_FRAME", "3")))
 SHOW_INDIVIDUAL_WINDOWS = _env_bool("UAV_SHOW_WINDOWS", False)
 DEFAULT_VIDEO_SEND_EVERY_N_FRAMES = 2 if SCENE_IS_NIGHT else 3
 VIDEO_SEND_EVERY_N_FRAMES = max(
@@ -391,6 +396,10 @@ if EDGE_REGION_DENSITY_KERNEL % 2 == 0:
 EDGE_REGION_DENSITY_THRESH = float(os.environ.get("UAV_EDGE_REGION_DENSITY_THRESH", "0.055"))
 EDGE_REGION_MIN_AREA = max(1, int(os.environ.get("UAV_EDGE_REGION_MIN_AREA", "1000")))
 EDGE_REGION_KEEP_Y_RATIO = float(os.environ.get("UAV_EDGE_REGION_KEEP_Y_RATIO", "0.18"))
+EDGE_REGION_FULL_LOW_COVER_THRESH = min(
+    1.0,
+    max(0.0, float(os.environ.get("UAV_EDGE_REGION_FULL_LOW_COVER_THRESH", "0.90"))),
+)
 EDGE_REGION_ROI_SUPPORT_RADIUS = max(4, int(os.environ.get("UAV_EDGE_REGION_ROI_SUPPORT_RADIUS", "32")))
 EDGE_REGION_LOW_SCORE_BOOST = float(os.environ.get("UAV_EDGE_REGION_LOW_SCORE_BOOST", "0.0"))
 EDGE_REGION_CLOSE_SIZE = max(3, int(os.environ.get("UAV_EDGE_REGION_CLOSE_SIZE", "9")))
@@ -401,12 +410,12 @@ if EDGE_REGION_DILATE_SIZE % 2 == 0:
     EDGE_REGION_DILATE_SIZE += 1
 EDGE_REGION_CLOSE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (EDGE_REGION_CLOSE_SIZE, EDGE_REGION_CLOSE_SIZE))
 EDGE_REGION_DILATE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (EDGE_REGION_DILATE_SIZE, EDGE_REGION_DILATE_SIZE))
-TRACK_SEARCH_MIN_YOLO_HITS = 2
-TRACK_SEARCH_MIN_RECENT_HITS = 2
-TRACK_SEARCH_MIN_SCORE = 0.32
+TRACK_SEARCH_MIN_YOLO_HITS = max(1, int(os.environ.get("UAV_TRACK_SEARCH_MIN_YOLO_HITS", "2")))
+TRACK_SEARCH_MIN_RECENT_HITS = max(1, int(os.environ.get("UAV_TRACK_SEARCH_MIN_RECENT_HITS", "2")))
+TRACK_SEARCH_MIN_SCORE = float(os.environ.get("UAV_TRACK_SEARCH_MIN_SCORE", "0.32"))
 TRACK_SEARCH_CONFIRMED_ONLY = True if HIGH_LAYER_MODE else False
 TRACK_SEARCH_MIN_NET_MOTION_PX = 6.0 if HIGH_LAYER_MODE else 0.0
-ENABLE_STATIC_BG_MASK = True
+ENABLE_STATIC_BG_MASK = _env_bool("UAV_STATIC_BG_MASK", True)
 ENABLE_LOW_LAYER_STATIC_BG_MASK = ENABLE_STATIC_BG_MASK
 DEFAULT_PROCESS_EVERY_N_FRAMES = 2 if SCENE_IS_NIGHT else 3
 PROCESS_EVERY_N_FRAMES = max(
@@ -420,7 +429,10 @@ MAX_INFERENCE_RESULT_AGE_FRAMES = max(
 )
 RESULT_GROUP_WAIT_SEC = max(0.05, float(os.environ.get("UAV_RESULT_GROUP_WAIT_SEC", "0.35")))
 TRACK_LIVE_MAX_AGE_FRAMES = MAX_INFERENCE_RESULT_AGE_FRAMES
-TRACK_SEARCH_MAX_AGE_FRAMES = PROCESS_EVERY_N_FRAMES * 3
+TRACK_SEARCH_MAX_AGE_FRAMES = max(
+    PROCESS_EVERY_N_FRAMES,
+    int(os.environ.get("UAV_TRACK_SEARCH_MAX_AGE_FRAMES", str(PROCESS_EVERY_N_FRAMES * 3))),
+)
 STATIC_CONFIRM_KEEP_MISSES = max(
     STATIC_CONFIRM_MAX_MISSES,
     int(os.environ.get("UAV_STATIC_CONFIRM_KEEP_MISSES", str(max(8, HOVER_MAX_RECHECK_MISSES * 2)))),
@@ -479,6 +491,42 @@ if LOW_BG_DENSE_KERNEL % 2 == 0:
     LOW_BG_DENSE_KERNEL += 1
 LOW_BG_DENSE_RATIO = float(os.environ.get("UAV_LOW_BG_DENSE_RATIO", "0.12"))
 LOW_BG_DENSE_MIN_QRANGE = float(os.environ.get("UAV_LOW_BG_DENSE_MIN_QRANGE", "12.0"))
+ENABLE_LOW_STATIC_BG_SEED_ROIS = _env_bool("UAV_LOW_STATIC_BG_SEED_ROIS", False)
+LOW_STATIC_BG_SEED_MAX_ROIS = max(0, int(os.environ.get("UAV_LOW_STATIC_BG_SEED_MAX_ROIS", "3")))
+LOW_STATIC_BG_SEED_SCORE_BONUS = float(os.environ.get("UAV_LOW_STATIC_BG_SEED_SCORE_BONUS", "65.0"))
+ENABLE_LOW_COMBINED_DIFF_BG_ROIS = _env_bool("UAV_LOW_COMBINED_DIFF_BG_ROIS", False)
+LOW_COMBINED_DIFF_THRESHOLDS = tuple(
+    int(v.strip())
+    for v in os.environ.get("UAV_LOW_COMBINED_DIFF_THRESHOLDS", "6,8,10").split(",")
+    if v.strip()
+)
+LOW_COMBINED_BG_PAD = max(2, int(os.environ.get("UAV_LOW_COMBINED_BG_PAD", "18")))
+LOW_COMBINED_MAX_ROIS = max(0, int(os.environ.get("UAV_LOW_COMBINED_MAX_ROIS", "4")))
+LOW_COMBINED_MIN_BG_PIXELS = max(1, int(os.environ.get("UAV_LOW_COMBINED_MIN_BG_PIXELS", "1")))
+LOW_COMBINED_MAX_AREA = max(1, int(os.environ.get("UAV_LOW_COMBINED_MAX_AREA", "280")))
+LOW_COMBINED_MAX_SIDE = max(1, int(os.environ.get("UAV_LOW_COMBINED_MAX_SIDE", "54")))
+LOW_COMBINED_SCORE_BONUS = float(os.environ.get("UAV_LOW_COMBINED_SCORE_BONUS", "85.0"))
+ENABLE_LOW_WEAK_TARGET_SEED_ROIS = _env_bool("UAV_LOW_WEAK_TARGET_SEED_ROIS", False)
+LOW_WEAK_TARGET_MAX_ROIS = max(0, int(os.environ.get("UAV_LOW_WEAK_TARGET_MAX_ROIS", "4")))
+LOW_WEAK_TARGET_DIFF_THRESH = max(1, int(os.environ.get("UAV_LOW_WEAK_TARGET_DIFF_THRESH", "3")))
+LOW_WEAK_TARGET_MIN_LOCAL_DIFF_MEAN = float(os.environ.get("UAV_LOW_WEAK_TARGET_MIN_LOCAL_DIFF_MEAN", "1.5"))
+LOW_WEAK_TARGET_MIN_AREA = max(1, int(os.environ.get("UAV_LOW_WEAK_TARGET_MIN_AREA", "1")))
+LOW_WEAK_TARGET_MAX_AREA = max(
+    LOW_WEAK_TARGET_MIN_AREA,
+    int(os.environ.get("UAV_LOW_WEAK_TARGET_MAX_AREA", "260")),
+)
+LOW_WEAK_TARGET_MAX_BOX_W = max(1, int(os.environ.get("UAV_LOW_WEAK_TARGET_MAX_BOX_W", "96")))
+LOW_WEAK_TARGET_MAX_BOX_H = max(1, int(os.environ.get("UAV_LOW_WEAK_TARGET_MAX_BOX_H", "96")))
+LOW_WEAK_TARGET_MIN_COMPACTNESS = min(
+    1.0,
+    max(0.0, float(os.environ.get("UAV_LOW_WEAK_TARGET_MIN_COMPACTNESS", "0.03"))),
+)
+LOW_WEAK_TARGET_DILATE_ITER = max(0, int(os.environ.get("UAV_LOW_WEAK_TARGET_DILATE_ITER", "1")))
+LOW_WEAK_TARGET_CLOSE_ITER = max(0, int(os.environ.get("UAV_LOW_WEAK_TARGET_CLOSE_ITER", "0")))
+LOW_WEAK_TARGET_SCORE_BONUS = float(os.environ.get("UAV_LOW_WEAK_TARGET_SCORE_BONUS", "16.0"))
+LOW_WEAK_TARGET_GRID_COLS = max(1, int(os.environ.get("UAV_LOW_WEAK_TARGET_GRID_COLS", "8")))
+LOW_WEAK_TARGET_GRID_ROWS = max(1, int(os.environ.get("UAV_LOW_WEAK_TARGET_GRID_ROWS", "6")))
+LOW_WEAK_TARGET_MAX_PER_CELL = max(1, int(os.environ.get("UAV_LOW_WEAK_TARGET_MAX_PER_CELL", "1")))
 DEFAULT_STATIC_BG_SECONDS = 10.0 if HIGH_LAYER_MODE else 30.0
 STATIC_BG_SECONDS = max(
     1.0,
@@ -549,6 +597,8 @@ VIBE_MAX_TILE_FG_RATIO = max(0.001, float(os.environ.get("UAV_VIBE_MAX_TILE_FG_R
 DIFF_THRESH = 4 if HIGH_LAYER_MODE else 8
 MIN_LOCAL_DIFF_MEAN = 10.0
 HIGH_LAYER_MIN_LOCAL_DIFF_MEAN = float(os.environ.get("UAV_HIGH_MIN_LOCAL_DIFF_MEAN", "4.0"))
+LOW_LAYER_DIFF_THRESH = max(1, int(os.environ.get("UAV_LOW_DIFF_THRESH", "8")))
+LOW_LAYER_MIN_LOCAL_DIFF_MEAN = float(os.environ.get("UAV_LOW_MIN_LOCAL_DIFF_MEAN", str(MIN_LOCAL_DIFF_MEAN)))
 ENABLE_GRAY_NOISE_SUPPRESSOR = False
 TRACK_REQUIRE_CURRENT_MOTION = True
 TRACK_MOTION_MIN_PIXELS = 3
@@ -563,6 +613,7 @@ BRIGHT_SPOT_REL_THRESH = 32.0
 BRIGHT_SPOT_MAX_AREA = 220 if HIGH_LAYER_MODE else 140
 BRIGHT_SPOT_MIN_BG_STD = 10.0
 ENABLE_LCM_FILTER = ENABLE_FRAME_DIFF_ROIS
+ENABLE_LOW_LCM_FILTER = _env_bool("UAV_LOW_LCM_FILTER", ENABLE_LCM_FILTER)
 LCM_BG_PAD = 18
 LCM_MIN_SCORE = 1.8
 LCM_MIN_RATIO = 1.25
@@ -582,9 +633,20 @@ MOTION_DILATE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 MOTION_CLOSE_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 STATIC_BG_OPEN_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
 STATIC_BG_DILATE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-MAX_ROIS_PER_FRAME = 6
+MAX_ROIS_PER_FRAME = max(1, int(os.environ.get("UAV_MAX_ROIS_PER_FRAME", "6")))
 MAX_ENQUEUED_ROIS_PER_UPDATE = max(1, int(os.environ.get("UAV_MAX_ROIS_PER_UPDATE", "6")))
 NPU_TASK_MAX_AGE_SEC = max(0.05, float(os.environ.get("UAV_NPU_TASK_MAX_AGE_SEC", "0.40")))
+ENABLE_MOTION_ROI_STABILITY_GATE = _env_bool("UAV_MOTION_ROI_STABILITY_GATE", False)
+MOTION_ROI_STABILITY_HITS = max(1, int(os.environ.get("UAV_MOTION_ROI_STABILITY_HITS", "2")))
+MOTION_ROI_STABILITY_MAX_AGE_FRAMES = max(
+    1,
+    int(os.environ.get("UAV_MOTION_ROI_STABILITY_MAX_AGE_FRAMES", str(PROCESS_EVERY_N_FRAMES * 2))),
+)
+MOTION_ROI_STABILITY_CENTER_DIST = max(
+    1.0,
+    float(os.environ.get("UAV_MOTION_ROI_STABILITY_CENTER_DIST", "120.0")),
+)
+MOTION_ROI_STABILITY_KEEP_TOP = max(0, int(os.environ.get("UAV_MOTION_ROI_STABILITY_KEEP_TOP", "0")))
 DEFAULT_NPU_WORKER_COUNT = 1 if N_CAM <= 2 else 3
 NPU_WORKER_COUNT = min(
     3,
@@ -602,6 +664,7 @@ ROI_GRID_MAX_PER_CELL = max(1, int(os.environ.get("UAV_ROI_GRID_MAX_PER_CELL", "
 ENABLE_ROI_OVERLAP_SUPPRESS = _env_bool("UAV_ROI_OVERLAP_SUPPRESS", False)
 ROI_OVERLAP_IOU_THRESH = float(os.environ.get("UAV_ROI_OVERLAP_IOU_THRESH", "0.28"))
 ROI_OVERLAP_COVER_THRESH = float(os.environ.get("UAV_ROI_OVERLAP_COVER_THRESH", "0.60"))
+ENABLE_BG_RISK_SEED_FILTER = _env_bool("UAV_BG_RISK_SEED_FILTER", True)
 INF_QUEUE_SIZE = MAX_ENQUEUED_ROIS_PER_UPDATE
 RES_QUEUE_SIZE = MAX_ROIS_PER_FRAME + 4
 DIFF_W = max(320, int(os.environ.get("UAV_DIFF_W", str(DEFAULT_DIFF_W))))
@@ -612,6 +675,21 @@ _local_model_path = _local_model_dir / "yolov5s.rknn"
 _board_model_path = _board_model_dir / "yolov5s.rknn"
 DAY_MODEL_NAMES = ("yolov5s_day_20260626.rknn", "yolov5s_20260626.rknn")
 NIGHT_MODEL_NAMES = ("yolov5s_night_latest.rknn", "yolov5s_egray0701n8_20260704.rknn")
+COMPLEX_DAY_MODEL_NAMES = (
+    "yolov5s_dataset0727_roi640_20260728_fp16.rknn",
+    "yolov5s_run014_run015_board9manual_roi640_20260721_fp16.rknn",
+    "yolov5s_run014_run015_run017_roi640_20260721_100e_best_fp16.rknn",
+    "yolov5s_run014_run015_roi640_20260719_fp16.rknn",
+)
+
+
+def find_named_model(model_names):
+    for model_dir in (_local_model_dir, _board_model_dir):
+        for model_name in model_names:
+            candidate = model_dir / model_name
+            if candidate.is_file():
+                return str(candidate)
+    return ""
 
 
 def choose_scene_model_path():
@@ -620,16 +698,46 @@ def choose_scene_model_path():
         return forced
 
     model_names = NIGHT_MODEL_NAMES if SCENE_IS_NIGHT else DAY_MODEL_NAMES
-    for model_dir in (_local_model_dir, _board_model_dir):
-        for model_name in model_names:
-            candidate = model_dir / model_name
-            if candidate.is_file():
-                return str(candidate)
+    named = find_named_model(model_names)
+    if named:
+        return named
 
     return str(_local_model_path if _local_model_path.is_file() else _board_model_path)
 
 
+def choose_layer_model_path(env_name, fallback_path, model_names=()):
+    forced = os.environ.get(env_name, "").strip()
+    if forced:
+        return forced
+    named = find_named_model(model_names)
+    return named if named else fallback_path
+
+
 MODEL_PATH = choose_scene_model_path()
+ENABLE_DUAL_REGION_MODELS = _env_bool("UAV_DUAL_REGION_MODELS", False)
+HIGH_MODEL_PATH = choose_layer_model_path("UAV_HIGH_RKNN_MODEL", MODEL_PATH, DAY_MODEL_NAMES)
+LOW_MODEL_PATH = choose_layer_model_path("UAV_LOW_RKNN_MODEL", MODEL_PATH, COMPLEX_DAY_MODEL_NAMES)
+
+
+def model_role_for_roi_layer(roi_layer):
+    if not ENABLE_DUAL_REGION_MODELS:
+        return "default"
+    layer = str(roi_layer or "").lower()
+    if layer == "low":
+        return "low"
+    if layer == "high":
+        return "high"
+    return "default"
+
+
+def model_path_for_role(role):
+    if role == "low":
+        return LOW_MODEL_PATH
+    if role == "high":
+        return HIGH_MODEL_PATH
+    return MODEL_PATH
+
+
 MAX_DIFF_AREA = 1000 if HIGH_LAYER_MODE else 600
 MAX_DIFF_BOX_W = 180 if HIGH_LAYER_MODE else 120
 MAX_DIFF_BOX_H = 180 if HIGH_LAYER_MODE else 120
@@ -710,9 +818,9 @@ def make_layer_profile(high, reason="global", day_scene=None, layer_confidence=0
         "enable_tight_motion_roi": bool(ENABLE_TIGHT_MOTION_ROI and not high),
         "enable_static_bg_change_gate": False if high else True,
         "static_bg_seconds": 10.0 if high else 30.0,
-        "diff_thresh": 4 if high else 8,
-        "min_local_diff_mean": HIGH_LAYER_MIN_LOCAL_DIFF_MEAN if high else MIN_LOCAL_DIFF_MEAN,
-        "enable_lcm_filter": False if high else ENABLE_LCM_FILTER,
+        "diff_thresh": 4 if high else LOW_LAYER_DIFF_THRESH,
+        "min_local_diff_mean": HIGH_LAYER_MIN_LOCAL_DIFF_MEAN if high else LOW_LAYER_MIN_LOCAL_DIFF_MEAN,
+        "enable_lcm_filter": False if high else ENABLE_LOW_LCM_FILTER,
         "enable_vertical_strip_filter": False if high else ENABLE_VERTICAL_STRIP_FILTER,
         "enable_gray_noise_suppressor": False,
         "enable_median_bg_gate": bool((not high) and ENABLE_LOW_MEDIAN_BG_GATE),
@@ -867,6 +975,12 @@ def roi_has_region_support(roi, region_mask, full_w, full_h):
     x2 = min(mw, mx + radius_x + 1)
     y2 = min(mh, my + radius_y + 1)
     return x2 > x1 and y2 > y1 and cv2.countNonZero(region_mask[y1:y2, x1:x2]) > 0
+
+
+def mask_cover_ratio(mask):
+    if mask is None or getattr(mask, "size", 0) <= 0:
+        return 0.0
+    return cv2.countNonZero(mask) / float(mask.size)
 
 
 def edge_region_profiles():
@@ -1047,12 +1161,22 @@ def estimate_rough_range_m(box, frame_width=IMG_W):
 def merge_nearby_boxes(boxes, dist_thresh=120):
     if not boxes: return []
     merged = []
+
+    def merge_kind(box):
+        if len(box) >= 10 and box[9] == "native":
+            return "native"
+        if len(box) >= 10 and box[9] == "zoom":
+            return "zoom"
+        if len(box) >= 9:
+            return "padded"
+        return "native"
+
     for box in boxes:
         is_dup = False
-        box_is_padded_roi = len(box) >= 9
+        box_kind = merge_kind(box)
         bcx, bcy = (box[0]+box[2])/2, (box[1]+box[3])/2
         for idx, m_box in enumerate(merged):
-            if box_is_padded_roi != (len(m_box) >= 9):
+            if box_kind != merge_kind(m_box):
                 continue
             mcx, mcy = (m_box[0]+m_box[2])/2, (m_box[1]+m_box[3])/2
             dist = math.sqrt((bcx-mcx)**2 + (bcy-mcy)**2)
@@ -1068,6 +1192,8 @@ def merge_nearby_boxes(boxes, dist_thresh=120):
 def roi_suppress_key(roi):
     if len(roi) >= 10 and roi[9] == "zoom":
         return "zoom"
+    if len(roi) >= 10 and roi[9] == "native":
+        return "native"
     if len(roi) >= 9:
         return "padded"
     return "native"
@@ -1462,6 +1588,8 @@ def track_roi_has_motion(track_roi, mask_small, full_w, full_h, min_pixels=TRACK
     return cv2.countNonZero(mask_small[my1:my2, mx1:mx2]) >= int(min_pixels)
 
 def roi_is_padded_canvas(roi):
+    if len(roi) >= 10 and roi[9] in ("native", "zoom"):
+        return False
     return len(roi) >= 9
 
 
@@ -1469,10 +1597,60 @@ def roi_is_zoom_crop(roi):
     return len(roi) >= 10 and roi[9] == "zoom"
 
 
+def roi_has_seed_center(roi):
+    return len(roi) >= 10 and roi[9] in ("native", "zoom")
+
+
 def roi_seed_center(roi):
-    if roi_is_padded_canvas(roi):
+    if roi_has_seed_center(roi) or roi_is_padded_canvas(roi):
         return float(roi[7]), float(roi[8])
     return (float(roi[0]) + float(roi[2])) * 0.5, (float(roi[1]) + float(roi[3])) * 0.5
+
+
+def filter_motion_rois_by_stability(rois, history, frame_idx, full_w, full_h):
+    if not ENABLE_MOTION_ROI_STABILITY_GATE or MOTION_ROI_STABILITY_HITS <= 1 or not rois:
+        return rois
+
+    max_age = int(MOTION_ROI_STABILITY_MAX_AGE_FRAMES)
+    center_dist2 = float(MOTION_ROI_STABILITY_CENTER_DIST) ** 2
+    history[:] = [s for s in history if frame_idx - int(s.get("last_frame", frame_idx)) <= max_age]
+
+    stable = []
+    ordered = sorted(rois, key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
+    for roi in ordered:
+        x1, y1, x2, y2 = [float(v) for v in roi[:4]]
+        if (x2 - x1) >= full_w * 0.90 and (y2 - y1) >= full_h * 0.90:
+            stable.append(roi)
+            continue
+
+        cx, cy = roi_seed_center(roi)
+        best = None
+        best_d2 = None
+        for state in history:
+            age = frame_idx - int(state.get("last_frame", frame_idx))
+            if age < 0 or age > max_age:
+                continue
+            d2 = (cx - float(state.get("cx", cx))) ** 2 + (cy - float(state.get("cy", cy))) ** 2
+            if d2 <= center_dist2 and (best_d2 is None or d2 < best_d2):
+                best = state
+                best_d2 = d2
+
+        if best is None:
+            best = {"cx": cx, "cy": cy, "hits": 1, "last_frame": frame_idx}
+            history.append(best)
+        else:
+            if int(best.get("last_frame", frame_idx)) != frame_idx:
+                best["hits"] = min(99, int(best.get("hits", 1)) + 1)
+            best["cx"] = float(best.get("cx", cx)) * 0.65 + cx * 0.35
+            best["cy"] = float(best.get("cy", cy)) * 0.65 + cy * 0.35
+            best["last_frame"] = frame_idx
+
+        if int(best.get("hits", 1)) >= MOTION_ROI_STABILITY_HITS:
+            stable.append(roi)
+
+    if not stable and MOTION_ROI_STABILITY_KEEP_TOP > 0:
+        stable = ordered[:MOTION_ROI_STABILITY_KEEP_TOP]
+    return stable
 
 
 def make_padded_roi_canvas(frame, roi, crop_size=CROP_SIZE, fill_value=TIGHT_MOTION_ROI_FILL):
@@ -1932,6 +2110,11 @@ def motion_rois_from_mask(
             rx2,
             ry2,
             score,
+            0,
+            0,
+            cx,
+            cy,
+            "native",
         ))
         if 0 < MOTION_ZOOM_CROP_SIZE <= min(full_w, full_h):
             zx1, zy1, zx2, zy2 = crop_roi_from_center(
@@ -1979,6 +2162,245 @@ def motion_rois_from_mask(
     rois = suppress_overlapping_rois(rois)
     rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
     return prioritize_diverse_rois(rois, full_w, full_h)
+
+
+def low_weak_target_seed_rois_from_diff(
+    diff_img,
+    gray,
+    bg_change_mask,
+    scale_x,
+    scale_y,
+    full_w,
+    full_h,
+    profile,
+):
+    if (
+        not ENABLE_LOW_WEAK_TARGET_SEED_ROIS
+        or LOW_WEAK_TARGET_MAX_ROIS <= 0
+        or profile.get("high", False)
+        or diff_img is None
+    ):
+        return []
+
+    _, weak_mask = cv2.threshold(
+        diff_img,
+        int(LOW_WEAK_TARGET_DIFF_THRESH),
+        255,
+        cv2.THRESH_BINARY,
+    )
+    if bg_change_mask is not None and profile.get("enable_static_bg_change_gate", True):
+        weak_mask = cv2.bitwise_and(weak_mask, bg_change_mask)
+    weak_mask = cleanup_motion_mask_with_iters(
+        weak_mask,
+        0,
+        LOW_WEAK_TARGET_DILATE_ITER,
+        LOW_WEAK_TARGET_CLOSE_ITER,
+    )
+
+    cnts, _ = cv2.findContours(weak_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates = []
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w <= 0 or h <= 0:
+            continue
+        if w > LOW_WEAK_TARGET_MAX_BOX_W or h > LOW_WEAK_TARGET_MAX_BOX_H:
+            continue
+        if profile.get("enable_vertical_strip_filter", ENABLE_VERTICAL_STRIP_FILTER) and is_vertical_strip_box((w, h)):
+            continue
+        mask_patch = weak_mask[y:y + h, x:x + w]
+        area = int(cv2.countNonZero(mask_patch))
+        if area < LOW_WEAK_TARGET_MIN_AREA or area > LOW_WEAK_TARGET_MAX_AREA:
+            continue
+        active = mask_patch > 0
+        if not np.any(active):
+            continue
+        local_diff = float(diff_img[y:y + h, x:x + w][active].mean())
+        if local_diff < LOW_WEAK_TARGET_MIN_LOCAL_DIFF_MEAN:
+            continue
+        compactness = area / max(1.0, float(w * h))
+        if compactness < LOW_WEAK_TARGET_MIN_COMPACTNESS:
+            continue
+        if should_suppress_gray_noise(gray, mask_patch, x, y, w, h, area):
+            continue
+        lcm_score, _lcm_ratio = local_contrast_measure(diff_img, mask_patch, x, y, w, h)
+        fx = int(math.floor(x * scale_x))
+        fy = int(math.floor(y * scale_y))
+        fx2 = int(math.ceil((x + w) * scale_x))
+        fy2 = int(math.ceil((y + h) * scale_y))
+        fw, fh = max(1, fx2 - fx), max(1, fy2 - fy)
+        cx, cy = fx + fw // 2, fy + fh // 2
+        rx1, ry1, rx2, ry2 = crop_roi_from_center(cx, cy, full_w, full_h)
+        score = (
+            LOW_WEAK_TARGET_SCORE_BONUS
+            + local_diff
+            + 8.0 * compactness
+            + 1.5 * max(0.0, min(float(lcm_score), 8.0))
+            - 0.006 * float(area)
+        )
+        candidates.append((rx1, ry1, rx2, ry2, score, 0, 0, cx, cy, "native"))
+
+    if not candidates:
+        return []
+
+    by_cell = {}
+    for roi in sorted(candidates, key=lambda r: r[4], reverse=True):
+        seed_cx, seed_cy = roi_seed_center(roi)
+        cell_x = max(0, min(LOW_WEAK_TARGET_GRID_COLS - 1, int(seed_cx / max(1.0, float(full_w)) * LOW_WEAK_TARGET_GRID_COLS)))
+        cell_y = max(0, min(LOW_WEAK_TARGET_GRID_ROWS - 1, int(seed_cy / max(1.0, float(full_h)) * LOW_WEAK_TARGET_GRID_ROWS)))
+        key = (cell_x, cell_y)
+        kept = by_cell.setdefault(key, [])
+        if len(kept) < LOW_WEAK_TARGET_MAX_PER_CELL:
+            kept.append(roi)
+
+    rois = []
+    for cell_rois in by_cell.values():
+        rois.extend(cell_rois)
+    rois.sort(key=lambda r: r[4], reverse=True)
+    return prioritize_diverse_rois(rois[:LOW_WEAK_TARGET_MAX_ROIS], full_w, full_h)
+
+
+def low_static_bg_seed_rois_from_model(
+    gray,
+    bg,
+    tol,
+    bg_qrange,
+    scale_x,
+    scale_y,
+    full_w,
+    full_h,
+    profile,
+):
+    if (
+        not ENABLE_LOW_STATIC_BG_SEED_ROIS
+        or LOW_STATIC_BG_SEED_MAX_ROIS <= 0
+        or profile.get("high", False)
+        or gray is None
+        or bg is None
+        or tol is None
+    ):
+        return []
+    bg_change_mask = build_static_bg_change_mask(
+        gray,
+        bg,
+        tol,
+        bg_qrange,
+        profile,
+        apply_cleanup=True,
+    )
+    if bg_change_mask is None or cv2.countNonZero(bg_change_mask) <= 0:
+        return []
+    bg_diff_img = cv2.absdiff(gray, bg)
+    rois = motion_rois_from_mask(
+        bg_change_mask,
+        bg_diff_img,
+        gray,
+        scale_x,
+        scale_y,
+        full_w,
+        full_h,
+    )
+    if not rois:
+        return []
+    boosted = [add_roi_score(r, LOW_STATIC_BG_SEED_SCORE_BONUS) for r in rois]
+    boosted.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
+    return boosted[:LOW_STATIC_BG_SEED_MAX_ROIS]
+
+
+def low_combined_diff_bg_rois_from_model(
+    diff_img,
+    gray,
+    bg,
+    tol,
+    bg_qrange,
+    scale_x,
+    scale_y,
+    full_w,
+    full_h,
+    profile,
+):
+    if (
+        not ENABLE_LOW_COMBINED_DIFF_BG_ROIS
+        or LOW_COMBINED_MAX_ROIS <= 0
+        or profile.get("high", False)
+        or diff_img is None
+        or gray is None
+        or bg is None
+        or tol is None
+    ):
+        return []
+    bg_change_mask = build_static_bg_change_mask(
+        gray,
+        bg,
+        tol,
+        bg_qrange,
+        profile,
+        apply_cleanup=False,
+    )
+    if bg_change_mask is None or cv2.countNonZero(bg_change_mask) <= 0:
+        return []
+
+    dh, dw = diff_img.shape[:2]
+    candidates = []
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    thresholds = LOW_COMBINED_DIFF_THRESHOLDS or (6, 8, 10)
+    for diff_thresh in thresholds:
+        seed = (diff_img >= int(diff_thresh)).astype(np.uint8) * 255
+        seed = cv2.dilate(seed, kernel, iterations=1)
+        num_labels, _labels, stats, centroids = cv2.connectedComponentsWithStats(seed, 8)
+        for label_idx in range(1, num_labels):
+            area = int(stats[label_idx, cv2.CC_STAT_AREA])
+            x = int(stats[label_idx, cv2.CC_STAT_LEFT])
+            y = int(stats[label_idx, cv2.CC_STAT_TOP])
+            w = int(stats[label_idx, cv2.CC_STAT_WIDTH])
+            h = int(stats[label_idx, cv2.CC_STAT_HEIGHT])
+            if (
+                area <= 0
+                or area > LOW_COMBINED_MAX_AREA
+                or w <= 0
+                or h <= 0
+                or w > LOW_COMBINED_MAX_SIDE
+                or h > LOW_COMBINED_MAX_SIDE
+            ):
+                continue
+            pad = int(LOW_COMBINED_BG_PAD)
+            x1 = max(0, x - pad)
+            y1 = max(0, y - pad)
+            x2 = min(dw, x + w + pad)
+            y2 = min(dh, y + h + pad)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            bg_patch = bg_change_mask[y1:y2, x1:x2]
+            bg_pixels = int(cv2.countNonZero(bg_patch))
+            if bg_pixels < LOW_COMBINED_MIN_BG_PIXELS:
+                continue
+            mask_patch = seed[y:y + h, x:x + w]
+            active = mask_patch > 0
+            local_diff = float(diff_img[y:y + h, x:x + w][active].mean()) if np.any(active) else 0.0
+            compactness = area / max(1.0, float(w * h))
+            source_bonus = LOW_COMBINED_SCORE_BONUS + max(0, int(diff_thresh) - 6) * 8.0
+            score = (
+                source_bonus
+                + 4.0 * min(local_diff, 24.0)
+                + 0.10 * min(float(bg_pixels), 600.0)
+                + 18.0 * min(compactness, 1.0)
+                - 0.010 * float(area)
+            )
+            cx = float(centroids[label_idx][0]) * scale_x
+            cy = float(centroids[label_idx][1]) * scale_y
+            rx1, ry1, rx2, ry2 = crop_roi_from_center(cx, cy, full_w, full_h)
+            candidates.append((rx1, ry1, rx2, ry2, score, 0, 0, cx, cy, "native"))
+
+    candidates.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
+    kept = []
+    for roi in candidates:
+        cx, cy = roi_seed_center(roi)
+        if any(math.hypot(cx - roi_seed_center(k)[0], cy - roi_seed_center(k)[1]) < 90.0 for k in kept):
+            continue
+        kept.append(roi)
+        if len(kept) >= LOW_COMBINED_MAX_ROIS:
+            break
+    return kept
+
 
 class TrajectoryFilter:
     def __init__(
@@ -2425,11 +2847,14 @@ class TrajectoryFilter:
         cx, cy = self._center(det)
         w, h = self._box_wh(det)
         det_layer = det[7] if len(det) > 7 and isinstance(det[7], str) else self.profile.get("name", "high")
+        det_model_role = det[8] if len(det) > 8 and isinstance(det[8], str) else model_role_for_roi_layer(det_layer)
         trk = {
             'id': self.next_id,
             'box': det[:4],
             'layer': det_layer,
+            'model_role': det_model_role,
             'layer_history': deque([det_layer], maxlen=self.recent_window),
+            'model_role_history': deque([det_model_role], maxlen=self.recent_window),
             'cx': cx,
             'cy': cy,
             'w': w,
@@ -2465,6 +2890,7 @@ class TrajectoryFilter:
     def _update_track(self, trk, det, frame, frame_idx, match_score, tmpl_score):
         cx, cy = self._center(det)
         det_layer = det[7] if len(det) > 7 and isinstance(det[7], str) else trk.get('layer', self.profile.get("name", "high"))
+        det_model_role = det[8] if len(det) > 8 and isinstance(det[8], str) else trk.get('model_role', model_role_for_roi_layer(det_layer))
         dt = max(1, int(frame_idx) - int(trk['last_frame']))
         nvx = (cx - trk['cx']) / dt
         nvy = (cy - trk['cy']) / dt
@@ -2475,9 +2901,13 @@ class TrajectoryFilter:
         trk['w'], trk['h'] = self._box_wh(det)
         trk['box'] = det[:4]
         trk['layer'] = det_layer
+        trk['model_role'] = det_model_role
         if not isinstance(trk.get('layer_history'), deque):
             trk['layer_history'] = deque([trk.get('layer', det_layer)], maxlen=self.recent_window)
         trk['layer_history'].append(det_layer)
+        if not isinstance(trk.get('model_role_history'), deque):
+            trk['model_role_history'] = deque([trk.get('model_role', det_model_role)], maxlen=self.recent_window)
+        trk['model_role_history'].append(det_model_role)
         trk['last_frame'] = int(frame_idx)
         trk['last_yolo_frame'] = int(frame_idx)
         trk['hits'] += 1
@@ -3230,26 +3660,32 @@ def build_initial_camera_bg_model(cam_idx):
 # 4
 # ==========================================
 def inference_worker(worker_idx=0):
-    yolo = None
+    yolo_by_role = {}
     stale_task_count = 0
     inferred_task_count = 0
     stale_by_cam = [0 for _ in range(N_CAM)]
     inferred_by_cam = [0 for _ in range(N_CAM)]
+    inferred_by_model = {}
     next_cam = worker_idx % N_CAM
-    try:
+
+    def get_yolo_for_role(role):
+        role = role or "default"
+        if role in yolo_by_role:
+            return yolo_by_role[role]
         core_index = worker_idx if NPU_WORKER_COUNT > 1 else None
-        yolo = YoloRKNN(
-            MODEL_PATH,
+        model_path = model_path_for_role(role)
+        yolo_by_role[role] = YoloRKNN(
+            model_path,
             (640, 640),
             ACTIVE_YOLO_CONF_THRESH,
             0.45,
             core_index=core_index,
         )
-        print(f"--> RKNN worker {worker_idx} loaded.", flush=True)
-    except Exception as e:
-        print(f"[Fatal] RKNN Init Failed: {type(e).__name__}: {e}", flush=True)
-        stop_event.set()
-        return
+        print(
+            f"--> RKNN worker {worker_idx} loaded model role={role} path={model_path}",
+            flush=True,
+        )
+        return yolo_by_role[role]
 
     while not stop_event.is_set():
         did_work = False
@@ -3275,13 +3711,16 @@ def inference_worker(worker_idx=0):
                     if stale_task_count % 50 == 0:
                         print(f"--> RKNN scheduler dropped {stale_task_count} stale ROI tasks.", flush=True)
                     break
+                model_role = model_role_for_roi_layer(roi_layer)
+                yolo = get_yolo_for_role(model_role)
                 res = yolo.infer(roi)
                 inferred_task_count += 1
                 inferred_by_cam[i] += 1
+                inferred_by_model[model_role] = inferred_by_model.get(model_role, 0) + 1
                 rh, rw = roi.shape[:2]
                 if res is None:
                     res = []
-                put_latest(res_queues[i], (res, x, y, rw, rh, src_frame_idx, seed_cx, seed_cy, roi_layer))
+                put_latest(res_queues[i], (res, x, y, rw, rh, src_frame_idx, seed_cx, seed_cy, roi_layer, model_role))
                 break
             except queue.Empty:
                 pass
@@ -3294,12 +3733,12 @@ def inference_worker(worker_idx=0):
                 stop_event.set()
                 break
         if not did_work: time.sleep(0.001)
-    if yolo:
+    for yolo in yolo_by_role.values():
         yolo.release()
     print(
         f"--> RKNN worker {worker_idx} summary: inferred={inferred_task_count} "
         f"stale_dropped={stale_task_count} inferred_by_cam={inferred_by_cam} "
-        f"stale_by_cam={stale_by_cam}",
+        f"stale_by_cam={stale_by_cam} inferred_by_model={inferred_by_model}",
         flush=True,
     )
 
@@ -3350,7 +3789,20 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
     frame_arrival_times = deque(maxlen=FPS_ESTIMATE_WINDOW)
     video_frame_period = 1.0 / max(1.0, source_fps)
     video_next_frame_ts = time.monotonic()
+    video_start_frame = (
+        int(round(VIDEO_TEST_START_SECONDS * source_fps))
+        if SIMULATE_BY_VIDEOS and VIDEO_TEST_START_SECONDS > 0.0
+        else 0
+    )
     video_max_frames = int(round(VIDEO_TEST_MAX_SECONDS * source_fps)) if VIDEO_TEST_MAX_SECONDS > 0 else 0
+    video_limit_frame = video_start_frame + video_max_frames if video_max_frames > 0 else 0
+    if SIMULATE_BY_VIDEOS and video_start_frame > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, video_start_frame)
+        print(
+            f"--> Cam {cam_idx} video start seek: "
+            f"seconds={VIDEO_TEST_START_SECONDS:.3f} frame={video_start_frame}",
+            flush=True,
+        )
     output_writer = None
     output_path = ""
     if SIMULATE_BY_VIDEOS and VIDEO_TEST_OUTPUT:
@@ -3390,7 +3842,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             detection_csv_file,
             fieldnames=[
                 "kind", "source_frame", "display_frame", "time_s", "track_id",
-                "layer",
+                "layer", "model_role",
                 "x1", "y1", "x2", "y2", "cx", "cy", "width", "height",
                 "center_x_norm", "center_y_norm", "lower_half", "confidence",
                 "misses", "age", "traj_score", "yolo_hits",
@@ -3424,6 +3876,8 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
     edge_high_profile, edge_low_profile = edge_region_profiles()
     edge_low_region_mask = None
     edge_region_mask_frame = -EDGE_REGION_UPDATE_FRAMES
+    edge_region_full_low_mode = False
+    edge_region_low_cover = 0.0
     print(
         f"--> Cam {cam_idx} frame-diff cadence: capture={actual_capture_w}x{actual_capture_h} "
         f"diff={DIFF_W}x{DIFF_H} reported_fps={source_fps:.1f} "
@@ -3439,7 +3893,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         f"fullframe_fallback_only={'yes' if FULLFRAME_FALLBACK_ONLY else 'no'}",
         flush=True,
     )
-    f_idx = 0
+    f_idx = video_start_frame - 1 if SIMULATE_BY_VIDEOS and video_start_frame > 0 else 0
     local_data_sender = DataSender(DATA_TARGETS, BOARD_ID)
     v_sender = VideoSender(
         VIDEO_TARGET_IP,
@@ -3460,6 +3914,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
     startup_star_reported_ready = False
     bg_learning_start_ts = None
     bg_next_sample_ts = 0.0
+    motion_roi_stability_history = []
     last_tracker_update_frame = 0
     last_grouped_result_frame = -1
     pending_result_expected = {}
@@ -3565,6 +4020,8 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         confidence = float(box[4]) if len(box) > 4 else float((track or {}).get("score", 0.0))
         box_layer = box[7] if len(box) > 7 and isinstance(box[7], str) else ""
         layer = str((track or {}).get("layer", box_layer))
+        box_model_role = box[8] if len(box) > 8 and isinstance(box[8], str) else ""
+        model_role = str((track or {}).get("model_role", box_model_role))
         detection_csv_writer.writerow({
             "kind": kind,
             "source_frame": int(source_frame_idx),
@@ -3572,6 +4029,7 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             "time_s": f"{float(source_frame_idx) / max(source_fps, 1.0):.3f}",
             "track_id": int((track or {}).get("id", -1)),
             "layer": layer,
+            "model_role": model_role,
             "x1": f"{x1:.2f}", "y1": f"{y1:.2f}",
             "x2": f"{x2:.2f}", "y2": f"{y2:.2f}",
             "cx": f"{cx:.2f}", "cy": f"{cy:.2f}",
@@ -3615,16 +4073,21 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             except queue.Empty:
                 break
 
-            if len(result) >= 9:
+            if len(result) >= 10:
+                dets, xo, yo, roi_w, roi_h, src_frame_idx, seed_cx, seed_cy, roi_layer, model_role = result[:10]
+            elif len(result) >= 9:
                 dets, xo, yo, roi_w, roi_h, src_frame_idx, seed_cx, seed_cy, roi_layer = result[:9]
+                model_role = model_role_for_roi_layer(roi_layer)
             elif len(result) >= 8:
                 dets, xo, yo, roi_w, roi_h, src_frame_idx, seed_cx, seed_cy = result[:8]
                 roi_layer = cam_profile.get("name", "high")
+                model_role = model_role_for_roi_layer(roi_layer)
             else:
                 dets, xo, yo, roi_w, roi_h, src_frame_idx = result
                 seed_cx = float(xo) + float(roi_w) * 0.5
                 seed_cy = float(yo) + float(roi_h) * 0.5
                 roi_layer = cam_profile.get("name", "high")
+                model_role = model_role_for_roi_layer(roi_layer)
             det_profile = (
                 edge_low_profile
                 if ENABLE_EDGE_REGION_LAYER and roi_layer == "low"
@@ -3668,10 +4131,16 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                     continue
                 background_risk = background_risk_for_box(mapped_box, bg_risk_model, full_w, full_h)
                 seed_alignment = motion_seed_alignment(mapped_box, seed_cx, seed_cy)
-                if (not VIBE_TILE_MODE) and (not YOLO_GLOBAL_LOCAL_MODE) and background_risk > seed_alignment:
+                if (
+                    ENABLE_BG_RISK_SEED_FILTER
+                    and (not VIBE_TILE_MODE)
+                    and (not YOLO_GLOBAL_LOCAL_MODE)
+                    and background_risk > seed_alignment
+                ):
                     continue
                 mapped_box.extend((background_risk, seed_alignment))
                 mapped_box.append(roi_layer)
+                mapped_box.append(model_role)
                 if (
                     mapped_box[2] > mapped_box[0]
                     and mapped_box[3] > mapped_box[1]
@@ -3736,10 +4205,11 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         return drained_boxes, got_result
 
     while not stop_event.is_set():
-        if SIMULATE_BY_VIDEOS and video_max_frames > 0 and f_idx >= video_max_frames:
+        if SIMULATE_BY_VIDEOS and video_limit_frame > 0 and (f_idx + 1) >= video_limit_frame:
             print(
                 f"--> Cam {cam_idx} reached video limit: "
-                f"frames={f_idx} seconds={VIDEO_TEST_MAX_SECONDS:.1f}",
+                f"frames={max(0, f_idx - video_start_frame + 1)} "
+                f"start={VIDEO_TEST_START_SECONDS:.1f}s seconds={VIDEO_TEST_MAX_SECONDS:.1f}",
                 flush=True,
             )
             break
@@ -3753,7 +4223,8 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
         ret, frame = cap.read()
         if not ret:
             if SIMULATE_BY_VIDEOS and VIDEO_TEST_LOOP:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, video_start_frame)
+                f_idx = video_start_frame - 1 if video_start_frame > 0 else 0
                 ret, frame = cap.read()
             elif SIMULATE_BY_VIDEOS:
                 print(f"--> Cam {cam_idx} reached video EOF after frames={f_idx}", flush=True)
@@ -3934,6 +4405,10 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
             )
             track_roi_keys = set()
             diff_img = None
+            debug_diff_rois_before_gate = 0
+            debug_diff_rois_after_gate = 0
+            debug_gray_rois_before_gate = 0
+            debug_gray_rois_after_gate = 0
             if VIBE_TILE_MODE:
                 if VIBE_TILE_KEEP_TRACK_ROIS and ENABLE_TRAJECTORY_TRACKING:
                     track_rois = tracker.get_yolo_global_local_rois(
@@ -3981,48 +4456,21 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                         ):
                             edge_low_region_mask = build_edge_low_region_mask(gray_small, bg_gray)
                             edge_region_mask_frame = f_idx
+                            edge_region_low_cover = mask_cover_ratio(edge_low_region_mask)
+                            next_full_low_mode = (
+                                edge_low_region_mask is not None
+                                and edge_region_low_cover >= EDGE_REGION_FULL_LOW_COVER_THRESH
+                            )
+                            if next_full_low_mode != edge_region_full_low_mode:
+                                print(
+                                    f"--> Cam {cam_idx} edge-region cover={edge_region_low_cover:.3f} "
+                                    f"threshold={EDGE_REGION_FULL_LOW_COVER_THRESH:.2f} "
+                                    f"mode={'full-low-complex' if next_full_low_mode else 'split-high-low'}",
+                                    flush=True,
+                                )
+                            edge_region_full_low_mode = next_full_low_mode
 
-                        high_region_mask = (
-                            cv2.bitwise_not(edge_low_region_mask)
-                            if edge_low_region_mask is not None
-                            else np.full(gray_small.shape, 255, dtype=np.uint8)
-                        )
-                        _, high_mask = cv2.threshold(diff_img, edge_high_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
-                        high_mask = cleanup_motion_mask_with_iters(
-                            high_mask,
-                            edge_high_profile.get("motion_erode_iter", MOTION_ERODE_ITER),
-                            edge_high_profile.get("motion_dilate_iter", MOTION_DILATE_ITER),
-                            edge_high_profile.get("motion_close_iter", MOTION_CLOSE_ITER),
-                        )
-                        high_mask = apply_night_static_point_mask(
-                            high_mask,
-                            bg_static_point_mask,
-                            edge_high_profile,
-                        )
-                        high_mask = apply_startup_star_mask(high_mask, startup_star_mask)
-                        high_region_motion_mask = cv2.bitwise_and(high_mask, high_region_mask)
-                        motion_mask = (
-                            cv2.bitwise_or(motion_mask, high_region_motion_mask)
-                            if motion_mask is not None
-                            else high_region_motion_mask
-                        )
-                        set_current_layer_profile(edge_high_profile)
-                        high_rois_all = motion_rois_from_mask(
-                            high_mask,
-                            diff_img,
-                            gray_small,
-                            scale_x,
-                            scale_y,
-                            W,
-                            H,
-                        )
-                        high_rois = [
-                            r for r in high_rois_all
-                            if not roi_has_region_support(r, edge_low_region_mask, W, H)
-                        ]
-                        diff_rois.extend(tag_roi_layer(r, "high") for r in high_rois)
-
-                        if edge_low_region_mask is not None:
+                        if edge_region_full_low_mode:
                             _, low_mask = cv2.threshold(diff_img, edge_low_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
                             bg_change_mask = build_static_bg_change_mask(
                                 gray_small,
@@ -4046,14 +4494,9 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                                 edge_low_profile,
                             )
                             low_mask = apply_startup_star_mask(low_mask, startup_star_mask)
-                            low_region_motion_mask = cv2.bitwise_and(low_mask, edge_low_region_mask)
-                            motion_mask = (
-                                cv2.bitwise_or(motion_mask, low_region_motion_mask)
-                                if motion_mask is not None
-                                else low_region_motion_mask
-                            )
+                            motion_mask = cv2.bitwise_or(motion_mask, low_mask) if motion_mask is not None else low_mask
                             set_current_layer_profile(edge_low_profile)
-                            low_rois_all = motion_rois_from_mask(
+                            low_rois = motion_rois_from_mask(
                                 low_mask,
                                 diff_img,
                                 gray_small,
@@ -4062,14 +4505,100 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                                 W,
                                 H,
                             )
-                            low_rois = [
-                                r for r in low_rois_all
-                                if roi_has_region_support(r, edge_low_region_mask, W, H)
-                            ]
                             diff_rois.extend(
                                 tag_roi_layer(add_roi_score(r, EDGE_REGION_LOW_SCORE_BOOST), "low")
                                 for r in low_rois
                             )
+                            set_current_layer_profile(cam_profile)
+                        else:
+                            high_region_mask = (
+                                cv2.bitwise_not(edge_low_region_mask)
+                                if edge_low_region_mask is not None
+                                else np.full(gray_small.shape, 255, dtype=np.uint8)
+                            )
+                            _, high_mask = cv2.threshold(diff_img, edge_high_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
+                            high_mask = cleanup_motion_mask_with_iters(
+                                high_mask,
+                                edge_high_profile.get("motion_erode_iter", MOTION_ERODE_ITER),
+                                edge_high_profile.get("motion_dilate_iter", MOTION_DILATE_ITER),
+                                edge_high_profile.get("motion_close_iter", MOTION_CLOSE_ITER),
+                            )
+                            high_mask = apply_night_static_point_mask(
+                                high_mask,
+                                bg_static_point_mask,
+                                edge_high_profile,
+                            )
+                            high_mask = apply_startup_star_mask(high_mask, startup_star_mask)
+                            high_region_motion_mask = cv2.bitwise_and(high_mask, high_region_mask)
+                            motion_mask = (
+                                cv2.bitwise_or(motion_mask, high_region_motion_mask)
+                                if motion_mask is not None
+                                else high_region_motion_mask
+                            )
+                            set_current_layer_profile(edge_high_profile)
+                            high_rois_all = motion_rois_from_mask(
+                                high_mask,
+                                diff_img,
+                                gray_small,
+                                scale_x,
+                                scale_y,
+                                W,
+                                H,
+                            )
+                            high_rois = [
+                                r for r in high_rois_all
+                                if not roi_has_region_support(r, edge_low_region_mask, W, H)
+                            ]
+                            diff_rois.extend(tag_roi_layer(r, "high") for r in high_rois)
+
+                            if edge_low_region_mask is not None:
+                                _, low_mask = cv2.threshold(diff_img, edge_low_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
+                                bg_change_mask = build_static_bg_change_mask(
+                                    gray_small,
+                                    bg_gray,
+                                    bg_tol,
+                                    bg_qrange,
+                                    edge_low_profile,
+                                    apply_cleanup=False,
+                                )
+                                if bg_change_mask is not None and edge_low_profile.get("enable_static_bg_change_gate", True):
+                                    low_mask = cv2.bitwise_and(low_mask, bg_change_mask)
+                                low_mask = cleanup_motion_mask_with_iters(
+                                    low_mask,
+                                    edge_low_profile.get("motion_erode_iter", MOTION_ERODE_ITER),
+                                    edge_low_profile.get("motion_dilate_iter", MOTION_DILATE_ITER),
+                                    edge_low_profile.get("motion_close_iter", MOTION_CLOSE_ITER),
+                                )
+                                low_mask = apply_night_static_point_mask(
+                                    low_mask,
+                                    bg_static_point_mask,
+                                    edge_low_profile,
+                                )
+                                low_mask = apply_startup_star_mask(low_mask, startup_star_mask)
+                                low_region_motion_mask = cv2.bitwise_and(low_mask, edge_low_region_mask)
+                                motion_mask = (
+                                    cv2.bitwise_or(motion_mask, low_region_motion_mask)
+                                    if motion_mask is not None
+                                    else low_region_motion_mask
+                                )
+                                set_current_layer_profile(edge_low_profile)
+                                low_rois_all = motion_rois_from_mask(
+                                    low_mask,
+                                    diff_img,
+                                    gray_small,
+                                    scale_x,
+                                    scale_y,
+                                    W,
+                                    H,
+                                )
+                                low_rois = [
+                                    r for r in low_rois_all
+                                    if roi_has_region_support(r, edge_low_region_mask, W, H)
+                                ]
+                                diff_rois.extend(
+                                    tag_roi_layer(add_roi_score(r, EDGE_REGION_LOW_SCORE_BOOST), "low")
+                                    for r in low_rois
+                                )
                         set_current_layer_profile(cam_profile)
                     else:
                         _, mask = cv2.threshold(diff_img, cam_profile["diff_thresh"], 255, cv2.THRESH_BINARY)
@@ -4100,6 +4629,49 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                             W,
                             H,
                         )
+                        weak_target_rois = low_weak_target_seed_rois_from_diff(
+                            diff_img,
+                            gray_small,
+                            bg_change_mask,
+                            scale_x,
+                            scale_y,
+                            W,
+                            H,
+                            cam_profile,
+                        )
+                        if weak_target_rois:
+                            diff_rois.extend(weak_target_rois)
+                        combined_diff_bg_rois = low_combined_diff_bg_rois_from_model(
+                            diff_img,
+                            gray_small,
+                            bg_gray,
+                            bg_tol,
+                            bg_qrange,
+                            scale_x,
+                            scale_y,
+                            W,
+                            H,
+                            cam_profile,
+                        )
+                        if combined_diff_bg_rois:
+                            diff_rois.extend(combined_diff_bg_rois)
+                        static_bg_seed_rois = low_static_bg_seed_rois_from_model(
+                            gray_small,
+                            bg_gray,
+                            bg_tol,
+                            bg_qrange,
+                            scale_x,
+                            scale_y,
+                            W,
+                            H,
+                            cam_profile,
+                        )
+                        if static_bg_seed_rois:
+                            diff_rois.extend(static_bg_seed_rois)
+                if diff_rois:
+                    debug_diff_rois_before_gate = len(diff_rois)
+                    diff_rois = filter_motion_rois_by_stability(diff_rois, motion_roi_stability_history, f_idx, W, H)
+                    debug_diff_rois_after_gate = len(diff_rois)
                 if diff_rois:
                     rois = merge_nearby_boxes(diff_rois + rois, dist_thresh=160)
                     rois = suppress_overlapping_rois(rois)
@@ -4107,6 +4679,10 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                     rois = prioritize_diverse_rois(rois, W, H)
 
             gray_seed_rois = [] if (VIBE_TILE_MODE or YOLO_GLOBAL_LOCAL_MODE) else gray_seed_rois_from_frame(gray_small, scale_x, scale_y, W, H)
+            if gray_seed_rois:
+                debug_gray_rois_before_gate = len(gray_seed_rois)
+                gray_seed_rois = filter_motion_rois_by_stability(gray_seed_rois, motion_roi_stability_history, f_idx, W, H)
+                debug_gray_rois_after_gate = len(gray_seed_rois)
             if gray_seed_rois:
                 rois = merge_nearby_boxes(gray_seed_rois + rois, dist_thresh=160)
                 rois = suppress_overlapping_rois(rois)
@@ -4159,6 +4735,15 @@ def capture_job(cam_idx, initial_bg_gray=None, initial_bg_tol=None, initial_bg_q
                 rois = suppress_overlapping_rois(rois)
                 rois.sort(key=lambda r: r[4] if len(r) > 4 else 0.0, reverse=True)
                 rois = prioritize_diverse_rois(rois, W, H)
+
+            if DEBUG_ROI_STATS and f_idx % DEBUG_ROI_STATS_INTERVAL == 0:
+                print(
+                    f"--> Cam {cam_idx} roi-stats frame={f_idx} "
+                    f"diff={debug_diff_rois_before_gate}->{debug_diff_rois_after_gate} "
+                    f"gray={debug_gray_rois_before_gate}->{debug_gray_rois_after_gate} "
+                    f"track={len(track_rois)} hover={len(hover_rois)} final={len(rois)}",
+                    flush=True,
+                )
 
             if pixel_map_record_writer is not None and motion_mask is not None:
                 record_now = time.monotonic()
@@ -4492,6 +5077,12 @@ if __name__ == '__main__':
         flush=True,
     )
     print(f"--> RKNN model: {os.path.abspath(MODEL_PATH)}", flush=True)
+    print(
+        f"--> RKNN region models: dual={'on' if ENABLE_DUAL_REGION_MODELS else 'off'} "
+        f"high={os.path.abspath(HIGH_MODEL_PATH)} "
+        f"low={os.path.abspath(LOW_MODEL_PATH)}",
+        flush=True,
+    )
     print(f"--> Input mode: {'video-test' if SIMULATE_BY_VIDEOS else 'independent-cameras'}", flush=True)
     print(f"--> Board id: {BOARD_ID} local_ips={get_local_ipv4s()}", flush=True)
     print(
@@ -4534,6 +5125,7 @@ if __name__ == '__main__':
         video_sources = [get_video_test_source(i) for i in range(N_CAM)]
         print(
             f"--> Video test: path={VIDEO_TEST_PATH} paths={video_sources} cameras={N_CAM} "
+            f"start_seconds={VIDEO_TEST_START_SECONDS:.1f} "
             f"max_seconds={VIDEO_TEST_MAX_SECONDS:.1f} realtime={VIDEO_TEST_REALTIME} "
             f"resize={VIDEO_TEST_RESIZE_W}x{VIDEO_TEST_RESIZE_H if VIDEO_TEST_RESIZE_W > 0 else 0} "
             f"output={VIDEO_TEST_OUTPUT or 'off'} save_rois={VIDEO_TEST_SAVE_ROIS_DIR or 'off'} "
