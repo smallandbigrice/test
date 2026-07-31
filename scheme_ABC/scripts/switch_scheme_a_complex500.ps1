@@ -1,5 +1,5 @@
 param(
-    [string[]]$BoardIps = @("192.168.0.8"),
+    [string[]]$BoardIps = @("192.168.0.1", "192.168.0.2"),
     [string]$User = "root",
     [string]$Service = "python_autostar.service",
     [string]$RemoteModelDir = "/home/Tronlong/rknn_model_zoo/examples/yolov5/model",

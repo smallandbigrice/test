@@ -235,6 +235,18 @@ $ExtraConfirmDropIn
 
 $EncodedDropIn = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($DropIn))
 $DropInPath = "/etc/systemd/system/$Service.d/zzzzz-uav-scene-mode.conf"
+$ReloadCommand = @"
+service="$Service"
+systemctl daemon-reload
+need_reload="`$(systemctl show "`$service" -p NeedDaemonReload --value 2>/dev/null || true)"
+if [ "`$need_reload" = "yes" ]; then
+    touch "/etc/systemd/system/`$service" 2>/dev/null || true
+    touch /etc/systemd/system/"`$service".d/*.conf 2>/dev/null || true
+    systemctl daemon-reload
+fi
+"@
+$ReloadCommand = $ReloadCommand -replace "`r`n", "`n"
+$ReloadEncoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ReloadCommand))
 $CleanupCommand = @"
 dir="/etc/systemd/system/$Service.d"
 mkdir -p "`$dir"
@@ -262,13 +274,13 @@ foreach ($BoardIp in $BoardIps) {
         ssh @SshOptions $Remote "echo $CleanupEncoded | base64 -d | sh"
     }
 
-    ssh @SshOptions $Remote "mkdir -p /etc/systemd/system/$Service.d && echo $EncodedDropIn | base64 -d > $DropInPath && systemctl daemon-reload"
+    ssh @SshOptions $Remote "mkdir -p /etc/systemd/system/$Service.d && echo $EncodedDropIn | base64 -d > $DropInPath && echo $ReloadEncoded | base64 -d | sh"
 
     if (-not $NoRestart) {
         ssh @SshOptions $Remote "systemctl restart $Service && sleep 2"
     }
 
-    $Status = ssh @SshOptions $Remote "systemctl is-active $Service; systemctl show $Service -p MainPID"
+    $Status = ssh @SshOptions $Remote "echo $ReloadEncoded | base64 -d | sh; systemctl is-active $Service; systemctl show $Service -p MainPID -p NeedDaemonReload"
     Write-Host ($Status -join "`n")
     $PidLine = ($Status | Where-Object { $_ -like "MainPID=*" } | Select-Object -First 1)
     $MainPid = ($PidLine -split "=")[1].Trim()
